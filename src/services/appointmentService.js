@@ -28,7 +28,7 @@ export async function updateAppointmentStatus({ appointmentId, status, actor }) 
   await updateDoc(doc(db, 'appointments', appointmentId), {
     status,
     updatedAt: serverTimestamp(),
-    lastChangeBy: actor, // 'doctor' | 'patient' | 'system'
+    lastChangeBy: actor, 
   });
 }
 

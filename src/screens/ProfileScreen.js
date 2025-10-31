@@ -115,24 +115,6 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </>
       )}
-
-      {/* Si quieres permitir cambiar el rol (solo para pruebas) descomenta:
-      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
-        <TouchableOpacity
-          style={[styles.toggle, form.role === 'patient' && styles.toggleOn]}
-          onPress={() => setForm({ ...form, role: 'patient' })}
-        >
-          <Text style={styles.toggleText}>Paciente</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.toggle, form.role === 'doctor' && styles.toggleOn]}
-          onPress={() => setForm({ ...form, role: 'doctor' })}
-        >
-          <Text style={styles.toggleText}>Médico</Text>
-        </TouchableOpacity>
-      </View>
-      */}
-
       <TouchableOpacity style={styles.button} disabled={saving} onPress={onSave}>
         <Text style={styles.buttonText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
       </TouchableOpacity>

@@ -3,12 +3,14 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons'; 
 import { useAuth } from '../context/AuthContext';
 
 export default function LoginScreen({ navigation }) {
   const { login, loading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const onLogin = async () => {
     if (!email || !password) {
@@ -30,19 +32,42 @@ export default function LoginScreen({ navigation }) {
           style={styles.input}
           placeholder="Email"
           autoCapitalize="none"
+          autoCorrect={false}
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
           editable={!loading}
+          returnKeyType="next"
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Contraseña"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          editable={!loading}
-        />
+
+        {/* Contenedor para input de contraseña */}
+        <View style={styles.inputWrapper}>
+          <TextInput
+            style={[styles.input, styles.inputPassword]}
+            placeholder="Contraseña"
+            value={password}
+            onChangeText={setPassword}
+            editable={!loading}
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+            returnKeyType="done"
+            onSubmitEditing={onLogin}
+          />
+          <TouchableOpacity
+            style={styles.eyeButton}
+            onPress={() => setShowPassword((p) => !p)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons
+              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+              size={22}
+              color="#1976D2"
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.button, loading && styles.buttonDisabled]}
@@ -64,10 +89,33 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5', padding: 20, justifyContent: 'center' },
   content: { gap: 12 },
   title: { fontSize: 28, fontWeight: 'bold', color: '#2196F3', marginBottom: 12, textAlign: 'center' },
+
   input: {
-    backgroundColor: '#fff', borderRadius: 8, padding: 15, fontSize: 16,
-    borderWidth: 1, borderColor: '#ddd'
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 15,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#ddd'
   },
+
+  inputWrapper: {
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  inputPassword: {
+    paddingRight: 48, 
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    height: 40,
+    width: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   button: { backgroundColor: '#2196F3', borderRadius: 8, padding: 15, alignItems: 'center' },
   buttonDisabled: { backgroundColor: '#90CAF9' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },

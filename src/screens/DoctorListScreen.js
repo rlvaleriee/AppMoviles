@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
 import { collection, onSnapshot, query, where, orderBy, startAt, endAt } from 'firebase/firestore';
 import { db } from '../firebase';
-import * as Location from 'expo-location'; // si usas Expo
+import * as Location from 'expo-location'; 
 
 const distKm = (a, b) => {
   const toRad = (x)=>x*Math.PI/180;
@@ -34,7 +34,6 @@ export default function DoctorsListScreen({ navigation }) {
   useEffect(() => {
     setLoading(true);
 
-    // Si tienes geohash bounds, úsalo (startAt/endAt). Aquí dejamos un query minimal:
     const base = collection(db, 'doctor_search');
     const q = specialty
       ? query(base, where('specialties', 'array-contains', specialty))
@@ -53,7 +52,7 @@ export default function DoctorsListScreen({ navigation }) {
     if (!myPos) return docs;
     return [...docs]
       .map(d => {
-        const loc = d.location; // GeoPoint
+        const loc = d.location; 
         const km = loc ? distKm(myPos, { lat: loc.latitude, lng: loc.longitude }) : null;
         return { ...d, distanceKm: km };
       })

@@ -30,7 +30,7 @@ function HomeStack() {
 
 export default function MainNavigator() {
   const { currentUserData } = useAuth();
-  const role = currentUserData?.role ?? 'patient'; // 'doctor' | 'patient'
+  const role = currentUserData?.role ?? 'patient'; 
   const appointmentsLabel = role === 'doctor' ? 'Solicitudes' : 'Citas';
 
   return (

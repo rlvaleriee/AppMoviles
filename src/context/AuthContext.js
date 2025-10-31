@@ -14,8 +14,8 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [currentUserData, setCurrentUserData] = useState(null);
-  const [loading, setLoading] = useState(false);   // para acciones (login/register/save)
-  const [booting, setBooting] = useState(true);    // para el arranque de la sesión
+  const [loading, setLoading] = useState(false);   
+  const [booting, setBooting] = useState(true);    
 
   // Observa cambios de sesión y carga el perfil
   useEffect(() => {
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
         name,
         email,
         phone,
-        role: 'patient', // default; si luego das de alta médicos, se cambia en perfil
+        role: 'patient', 
       };
       await saveUserProfile(cred.user.uid, userDoc);
 
