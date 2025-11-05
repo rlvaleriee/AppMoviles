@@ -24,12 +24,11 @@ dayjs.locale('es');
 const SLOT_DURATION_MIN = 30; // minutos
 const DEFAULT_WORK_SETTINGS = {
   slotDuration: SLOT_DURATION_MIN,
-  // 0=Dom ... 6=Sab
-  workingDays: { 0: false, 1: true, 2: true, 3: true, 4: true, 5: true, 6: false },
-  // Dos bloques por defecto; puedes agregar más desde el modal si lo deseas
+  // 0=Dom ... 6=Sáb (Domingo NO laborable por defecto)
+  workingDays: { 0: false, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true },
   blocks: [
     { start: '09:00', end: '12:00' },
-    { start: '14:00', end: '18:00' },
+    { start: '13:00', end: '18:00' },
   ],
 };
 
@@ -65,9 +64,9 @@ const sliceIntervalToSlots = (start, end, duration) => {
   return result;
 };
 
-const uniqueSorted = (arr) => Array.from(new Set(arr)).sort((a, b) => toMinutes(a) - toMinutes(b));
+const uniqueSorted = (arr) =>
+  Array.from(new Set(arr)).sort((a, b) => toMinutes(a) - toMinutes(b));
 
-// Para compatibilidad con documentos antiguos que tenían ranges [{start,end}]
 const deriveSlotsFromRanges = (ranges = [], duration = SLOT_DURATION_MIN) => {
   const all = [];
   for (const r of ranges) {
@@ -111,13 +110,11 @@ export default function DoctorCalendarScreen() {
     loadMonthAvailabilities();
   }, [currentMonth, firebaseUser, workSettings]);
 
-  const settingsDocRef = () => firebaseUser?.uid
-    ? doc(db, 'users', firebaseUser.uid, 'config', 'workSettings')
-    : null;
+  const settingsDocRef = () =>
+    firebaseUser?.uid ? doc(db, 'users', firebaseUser.uid, 'config', 'workSettings') : null;
 
-  const availDocRefFor = (dateKey) => firebaseUser?.uid
-    ? doc(db, 'users', firebaseUser.uid, 'availabilities', dateKey)
-    : null;
+  const availDocRefFor = (dateKey) =>
+    firebaseUser?.uid ? doc(db, 'users', firebaseUser.uid, 'availabilities', dateKey) : null;
 
   const loadWorkSettings = useCallback(async () => {
     if (!firebaseUser?.uid) return;
@@ -129,7 +126,10 @@ export default function DoctorCalendarScreen() {
         const merged = {
           slotDuration: data.slotDuration ?? DEFAULT_WORK_SETTINGS.slotDuration,
           workingDays: { ...DEFAULT_WORK_SETTINGS.workingDays, ...(data.workingDays || {}) },
-          blocks: Array.isArray(data.blocks) && data.blocks.length > 0 ? data.blocks : DEFAULT_WORK_SETTINGS.blocks,
+          blocks:
+            Array.isArray(data.blocks) && data.blocks.length > 0
+              ? data.blocks
+              : DEFAULT_WORK_SETTINGS.blocks,
         };
         setWorkSettings(merged);
         setSettingsDraft(merged);
@@ -161,7 +161,10 @@ export default function DoctorCalendarScreen() {
           if (Array.isArray(data.slots)) {
             count = data.slots.length;
           } else if (Array.isArray(data.ranges)) {
-            count = deriveSlotsFromRanges(data.ranges, data.slotDuration || SLOT_DURATION_MIN).length;
+            count = deriveSlotsFromRanges(
+              data.ranges,
+              data.slotDuration || SLOT_DURATION_MIN
+            ).length;
           }
           map[dateKey] = count;
         }
@@ -179,7 +182,7 @@ export default function DoctorCalendarScreen() {
   // Generación de slots según ajustes
   // ============================
   const generateMasterSlotsForDate = useCallback((date, settings) => {
-    const dow = date.day(); // 0..6
+    const dow = date.day(); // 0..6 (0=Domingo)
     if (!settings?.workingDays?.[dow]) return [];
 
     const all = [];
@@ -192,36 +195,43 @@ export default function DoctorCalendarScreen() {
     return uniqueSorted(all);
   }, []);
 
-  const openDayModal = useCallback(async (date) => {
-    if (!firebaseUser?.uid) return;
-    setSelectedDate(date);
+  const openDayModal = useCallback(
+    async (date) => {
+      if (!firebaseUser?.uid) return;
+      setSelectedDate(date);
 
-    const dateKey = date.format('YYYY-MM-DD');
-    const ref = availDocRefFor(dateKey);
+      const dateKey = date.format('YYYY-MM-DD');
+      const ref = availDocRefFor(dateKey);
 
-    try {
-      const master = generateMasterSlotsForDate(date, workSettings);
-      setAvailableSlots(master);
+      try {
+        const master = generateMasterSlotsForDate(date, workSettings);
+        setAvailableSlots(master);
 
-      let previouslySelected = [];
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        const data = snap.data();
-        if (Array.isArray(data.slots)) previouslySelected = data.slots;
-        else if (Array.isArray(data.ranges)) previouslySelected = deriveSlotsFromRanges(data.ranges, data.slotDuration || SLOT_DURATION_MIN);
+        let previouslySelected = [];
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (Array.isArray(data.slots)) previouslySelected = data.slots;
+          else if (Array.isArray(data.ranges))
+            previouslySelected = deriveSlotsFromRanges(
+              data.ranges,
+              data.slotDuration || SLOT_DURATION_MIN
+            );
+        }
+
+        // Mantener sólo los que estén dentro del horario maestro actual
+        const selectedSet = new Set(master.filter((t) => previouslySelected.includes(t)));
+        setSelectedSlots(selectedSet);
+        setDayModalVisible(true);
+      } catch (e) {
+        console.error('Error cargando disponibilidad de la fecha:', e);
+        setAvailableSlots([]);
+        setSelectedSlots(new Set());
+        setDayModalVisible(true);
       }
-
-      // Mantener sólo los que estén dentro del horario maestro actual
-      const selectedSet = new Set(master.filter((t) => previouslySelected.includes(t)));
-      setSelectedSlots(selectedSet);
-      setDayModalVisible(true);
-    } catch (e) {
-      console.error('Error cargando disponibilidad de la fecha:', e);
-      setAvailableSlots([]);
-      setSelectedSlots(new Set());
-      setDayModalVisible(true);
-    }
-  }, [firebaseUser, workSettings, generateMasterSlotsForDate]);
+    },
+    [firebaseUser, workSettings, generateMasterSlotsForDate]
+  );
 
   // ============================
   // Acciones del día (selección de cupos)
@@ -229,7 +239,8 @@ export default function DoctorCalendarScreen() {
   const toggleSlot = (time) => {
     setSelectedSlots((prev) => {
       const next = new Set(prev);
-      if (next.has(time)) next.delete(time); else next.add(time);
+      if (next.has(time)) next.delete(time);
+      else next.add(time);
       return next;
     });
   };
@@ -261,9 +272,9 @@ export default function DoctorCalendarScreen() {
         ref,
         {
           date: Timestamp.fromDate(dateObj),
-          slots, // <- ahora guardamos los cupos explícitos
+          slots, // guardamos los cupos explícitos
           slotDuration: workSettings.slotDuration || SLOT_DURATION_MIN,
-          generatedFrom: workSettings.blocks, // opcional, referencial
+          generatedFrom: workSettings.blocks, // opcional
           updatedAt: Timestamp.now(),
         },
         { merge: true }
@@ -285,31 +296,27 @@ export default function DoctorCalendarScreen() {
     const dateKey = selectedDate.format('YYYY-MM-DD');
     const ref = availDocRefFor(dateKey);
 
-    Alert.alert(
-      'Eliminar disponibilidad',
-      '¿Eliminar todos los cupos de este día?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setSaving(true);
-              await deleteDoc(ref);
-              setDatesWithAvailability({ ...datesWithAvailability, [dateKey]: 0 });
-              setSelectedSlots(new Set());
-              Alert.alert('Eliminado', 'La disponibilidad ha sido eliminada');
-            } catch (e) {
-              console.error('Error eliminando disponibilidad:', e);
-              Alert.alert('Error', 'No se pudo eliminar la disponibilidad');
-            } finally {
-              setSaving(false);
-            }
-          },
+    Alert.alert('Eliminar disponibilidad', '¿Eliminar todos los cupos de este día?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            setSaving(true);
+            await deleteDoc(ref);
+            setDatesWithAvailability({ ...datesWithAvailability, [dateKey]: 0 });
+            setSelectedSlots(new Set());
+            Alert.alert('Eliminado', 'La disponibilidad ha sido eliminada');
+          } catch (e) {
+            console.error('Error eliminando disponibilidad:', e);
+            Alert.alert('Error', 'No se pudo eliminar la disponibilidad');
+          } finally {
+            setSaving(false);
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   // ============================
@@ -336,11 +343,17 @@ export default function DoctorCalendarScreen() {
   };
 
   const addBlock = () => {
-    setSettingsDraft((prev) => ({ ...prev, blocks: [...prev.blocks, { start: '09:00', end: '10:00' }] }));
+    setSettingsDraft((prev) => ({
+      ...prev,
+      blocks: [...prev.blocks, { start: '09:00', end: '10:00' }],
+    }));
   };
 
   const removeBlock = (index) => {
-    setSettingsDraft((prev) => ({ ...prev, blocks: prev.blocks.filter((_, i) => i !== index) }));
+    setSettingsDraft((prev) => ({
+      ...prev,
+      blocks: prev.blocks.filter((_, i) => i !== index),
+    }));
   };
 
   const saveSettings = async () => {
@@ -349,10 +362,18 @@ export default function DoctorCalendarScreen() {
     // Validar bloques
     const cleanBlocks = (settingsDraft.blocks || [])
       .map((b) => ({ start: b.start?.trim(), end: b.end?.trim() }))
-      .filter((b) => Number.isFinite(toMinutes(b.start)) && Number.isFinite(toMinutes(b.end)) && toMinutes(b.end) > toMinutes(b.start));
+      .filter(
+        (b) =>
+          Number.isFinite(toMinutes(b.start)) &&
+          Number.isFinite(toMinutes(b.end)) &&
+          toMinutes(b.end) > toMinutes(b.start)
+      );
 
     if (cleanBlocks.length === 0) {
-      Alert.alert('Configurar horario', 'Debes definir al menos un bloque válido (ej: 09:00 a 12:00).');
+      Alert.alert(
+        'Configurar horario',
+        'Debes definir al menos un bloque válido (ej: 09:00 a 12:00).'
+      );
       return;
     }
 
@@ -392,8 +413,11 @@ export default function DoctorCalendarScreen() {
   const renderCalendar = () => {
     const startOfMonth = currentMonth.startOf('month');
     const endOfMonth = currentMonth.endOf('month');
-    const startDate = startOfMonth.startOf('week');
-    const endDate = endOfMonth.endOf('week');
+
+    let startDate = startOfMonth;
+    while (startDate.day() !== 0) startDate = startDate.subtract(1, 'day');
+    let endDate = endOfMonth;
+    while (endDate.day() !== 6) endDate = endDate.add(1, 'day');
 
     const days = [];
     let currentDate = startDate;
@@ -470,7 +494,9 @@ export default function DoctorCalendarScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Calendario de Disponibilidad</Text>
-        <Text style={styles.subtitle}>Define tus días/horarios y selecciona cupos disponibles</Text>
+        <Text style={styles.subtitle}>
+          Define tus días/horarios y selecciona cupos disponibles
+        </Text>
       </View>
 
       <View style={styles.monthNavigation}>
@@ -479,7 +505,9 @@ export default function DoctorCalendarScreen() {
         </TouchableOpacity>
 
         <View style={styles.monthDisplay}>
-          <Text style={styles.monthText}>{currentMonth.format('MMMM YYYY').toUpperCase()}</Text>
+          <Text style={styles.monthText}>
+            {currentMonth.format('MMMM YYYY').toUpperCase()}
+          </Text>
         </View>
 
         <TouchableOpacity onPress={handleNextMonth} style={styles.navButton}>
@@ -555,7 +583,12 @@ export default function DoctorCalendarScreen() {
                         style={[styles.chip, isSelected ? styles.chipSelected : styles.chipUnselected]}
                         onPress={() => toggleSlot(t)}
                       >
-                        <Text style={[styles.chipText, isSelected ? styles.chipTextSelected : styles.chipTextUnselected]}>
+                        <Text
+                          style={[
+                            styles.chipText,
+                            isSelected ? styles.chipTextSelected : styles.chipTextUnselected,
+                          ]}
+                        >
                           {t}
                         </Text>
                       </TouchableOpacity>
@@ -584,7 +617,9 @@ export default function DoctorCalendarScreen() {
               )}
 
               <TouchableOpacity onPress={saveDayAvailability} style={styles.saveButton} disabled={saving}>
-                {saving ? <ActivityIndicator color="#fff" /> : (
+                {saving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
                   <Text style={styles.saveButtonText}>Guardar ({selectedSlots.size})</Text>
                 )}
               </TouchableOpacity>
@@ -612,10 +647,22 @@ export default function DoctorCalendarScreen() {
             <ScrollView style={styles.modalBody}>
               <Text style={styles.sectionTitle}>Días laborables</Text>
               <View style={styles.dowWrap}>
-                {[0,1,2,3,4,5,6].map((d) => (
-                  <TouchableOpacity key={d} style={[styles.dowChip, settingsDraft.workingDays?.[d] ? styles.chipSelected : styles.chipUnselected]} onPress={() => updateWorkingDay(d)}>
-                    <Text style={[styles.dowText, settingsDraft.workingDays?.[d] ? styles.chipTextSelected : styles.chipTextUnselected]}>
-                      {['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][d]}
+                {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                  <TouchableOpacity
+                    key={d}
+                    style={[
+                      styles.dowChip,
+                      settingsDraft.workingDays?.[d] ? styles.chipSelected : styles.chipUnselected,
+                    ]}
+                    onPress={() => updateWorkingDay(d)}
+                  >
+                    <Text
+                      style={[
+                        styles.dowText,
+                        settingsDraft.workingDays?.[d] ? styles.chipTextSelected : styles.chipTextUnselected,
+                      ]}
+                    >
+                      {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][d]}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -652,7 +699,12 @@ export default function DoctorCalendarScreen() {
               <Text style={[styles.sectionTitle, { marginTop: 10 }]}>Duración de cada cita (min)</Text>
               <TextInput
                 value={String(settingsDraft.slotDuration)}
-                onChangeText={(v) => setSettingsDraft((prev) => ({ ...prev, slotDuration: parseInt(v || '0', 10) || SLOT_DURATION_MIN }))}
+                onChangeText={(v) =>
+                  setSettingsDraft((prev) => ({
+                    ...prev,
+                    slotDuration: parseInt(v || '0', 10) || SLOT_DURATION_MIN,
+                  }))
+                }
                 keyboardType="numeric"
                 style={[styles.timeInput, { width: 120 }]}
               />
@@ -676,18 +728,50 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
   subtitle: { fontSize: 14, color: '#E3F2FD' },
   monthNavigation: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingVertical: 15, backgroundColor: '#fff',
-    borderBottomWidth: 1, borderBottomColor: '#E0E0E0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
   },
-  navButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, backgroundColor: '#F5F5F5' },
+  navButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+  },
   navButtonText: { fontSize: 20, color: '#2196F3' },
   monthDisplay: { flex: 1, alignItems: 'center' },
   monthText: { fontSize: 16, fontWeight: '600', color: '#333' },
-  actionsRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 10, gap: 10 },
-  todayButton: { flex: 1, alignSelf: 'center', paddingHorizontal: 15, paddingVertical: 10, backgroundColor: '#2196F3', borderRadius: 10 },
+  actionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    gap: 10,
+  },
+  todayButton: {
+    flex: 1,
+    alignSelf: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    backgroundColor: '#2196F3',
+    borderRadius: 10,
+  },
   todayButtonText: { color: '#fff', fontSize: 14, fontWeight: '600', textAlign: 'center' },
-  configButton: { flex: 1, alignSelf: 'center', paddingHorizontal: 15, paddingVertical: 10, backgroundColor: '#455A64', borderRadius: 10 },
+  configButton: {
+    flex: 1,
+    alignSelf: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    backgroundColor: '#455A64',
+    borderRadius: 10,
+  },
   configButtonText: { color: '#fff', fontSize: 14, fontWeight: '600', textAlign: 'center' },
 
   legend: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 10, gap: 20 },
@@ -698,16 +782,29 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   calendarContainer: { flex: 1, paddingHorizontal: 10 },
   calendar: {
-    backgroundColor: '#fff', borderRadius: 10, padding: 10, marginVertical: 10, elevation: 2,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 10,
+    marginVertical: 10,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   weekDays: { flexDirection: 'row', marginBottom: 10 },
   weekDayCell: { flex: 1, alignItems: 'center' },
   weekDayText: { fontSize: 12, fontWeight: '600', color: '#666' },
   weekRow: { flexDirection: 'row' },
   dayCell: {
-    flex: 1, aspectRatio: 1, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#fff', position: 'relative',
+    flex: 1,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#fff',
+    position: 'relative',
   },
   dayCellOtherMonth: { backgroundColor: '#F9F9F9' },
   dayCellToday: { backgroundColor: '#E3F2FD', borderColor: '#2196F3' },
@@ -718,18 +815,45 @@ const styles = StyleSheet.create({
   dayTextToday: { color: '#2196F3', fontWeight: 'bold' },
   dayTextPast: { color: '#999' },
   availabilityIndicator: {
-    position: 'absolute', bottom: 2, right: 2, backgroundColor: '#4CAF50',
-    borderRadius: 10, minWidth: 18, height: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    backgroundColor: '#4CAF50',
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
   },
   availabilityText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '85%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
   modalTitle: { fontSize: 18, fontWeight: '600', color: '#333', textTransform: 'capitalize' },
   modalClose: { fontSize: 24, color: '#999' },
   modalBody: { padding: 20, maxHeight: 420 },
-  modalFooter: { flexDirection: 'row', flexWrap: 'wrap', padding: 20, gap: 10, borderTopWidth: 1, borderTopColor: '#E0E0E0' },
+  modalFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 20,
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
 
   emptyText: { textAlign: 'center', color: '#999', fontSize: 14, marginVertical: 20 },
 
@@ -747,7 +871,13 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: '#333', fontWeight: '600' },
   deleteButton: { backgroundColor: '#F44336', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8 },
   deleteButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  saveButton: { backgroundColor: '#4CAF50', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8, flexGrow: 1 },
+  saveButton: {
+    backgroundColor: '#4CAF50',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexGrow: 1,
+  },
   saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '600', textAlign: 'center' },
 
   // Settings
@@ -756,10 +886,27 @@ const styles = StyleSheet.create({
   dowChip: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 20, borderWidth: 1 },
   dowText: { fontSize: 14 },
   blockRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 10 },
-  timeInput: { flex: 1, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 15, paddingVertical: 10, fontSize: 16, backgroundColor: '#F9F9F9' },
+  timeInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+  },
   timeSeparator: { fontSize: 16, color: '#666' },
   removeButton: { padding: 8 },
   removeButtonText: { fontSize: 20 },
-  addButton: { borderWidth: 2, borderColor: '#2196F3', borderStyle: 'dashed', borderRadius: 8, paddingVertical: 15, alignItems: 'center', marginTop: 6 },
+  addButton: {
+    borderWidth: 2,
+    borderColor: '#2196F3',
+    borderStyle: 'dashed',
+    borderRadius: 8,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 6,
+  },
   addButtonText: { color: '#2196F3', fontSize: 16, fontWeight: '600' },
 });
