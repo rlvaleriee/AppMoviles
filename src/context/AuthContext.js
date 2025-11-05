@@ -75,7 +75,11 @@ export function AuthProvider({ children }) {
       return { success: true };
     } catch (e) {
       console.log('login error', e);
-      return { success: false, message: e?.message || 'No se pudo iniciar sesión' };
+      return {
+        success: false,
+        message: e?.message || 'No se pudo iniciar sesión',
+        error: e
+      };
     } finally {
       setLoading(false);
     }

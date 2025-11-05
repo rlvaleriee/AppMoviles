@@ -8,29 +8,27 @@ import HomeScreen from '../screens/HomeScreen';
 import AppointmentsScreen from '../screens/AppointmentsScreen';
 import ChatbotScreen from '../screens/ChatbotScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import AppointmentCreateScreen from '../screens/AppointmentCreateScreen';
+import DoctorDetailScreen from '../screens/DoctorDetailScreen';
+import DoctorCalendarScreen from '../screens/DoctorCalendarScreen'; 
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
 function HomeStack() {
   return (
-    <Stack.Navigator
-      initialRouteName="HomeMain"
-      screenOptions={{ headerShown: false }}
-    >
+    <Stack.Navigator initialRouteName="HomeMain" screenOptions={{ headerShown: false }}>
       <Stack.Screen name="HomeMain" component={HomeScreen} />
+      <Stack.Screen name="DoctorDetail" component={DoctorDetailScreen} />
       <Stack.Screen name="Appointments" component={AppointmentsScreen} />
       <Stack.Screen name="Chatbot" component={ChatbotScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
-      <Stack.Screen name="AppointmentCreate" component={AppointmentCreateScreen} />
     </Stack.Navigator>
   );
 }
 
 export default function MainNavigator() {
   const { currentUserData } = useAuth();
-  const role = currentUserData?.role ?? 'patient'; 
+  const role = currentUserData?.role ?? 'patient'; // 'doctor' | 'patient'
   const appointmentsLabel = role === 'doctor' ? 'Solicitudes' : 'Citas';
 
   return (
@@ -42,13 +40,10 @@ export default function MainNavigator() {
         tabBarActiveTintColor: '#2196F3',
         tabBarInactiveTintColor: '#999',
         tabBarHideOnKeyboard: true,
-        tabBarStyle: {
-          paddingBottom: 5,
-          paddingTop: 5,
-          height: 60,
-        },
+        tabBarStyle: { paddingBottom: 5, paddingTop: 5, height: 60 },
       }}
     >
+      {/* 1. Inicio */}
       <Tab.Screen
         name="Home"
         component={HomeStack}
@@ -58,6 +53,7 @@ export default function MainNavigator() {
         }}
       />
 
+      {/* 2. Citas / Solicitudes */}
       <Tab.Screen
         name="AppointmentsTab"
         component={AppointmentsScreen}
@@ -67,16 +63,31 @@ export default function MainNavigator() {
         }}
       />
 
-      <Tab.Screen
-        name="ChatbotTab"
-        component={ChatbotScreen}
-        options={{
-          tabBarLabel: 'Chat',
-          tabBarIcon: () => <Text style={{ fontSize: 24 }}>💬</Text>,
-          unmountOnBlur: true, 
-        }}
-      />
+      {/* 3. Paciente: Chat | Doctor: Calendario */}
+      {role === 'patient' ? (
+        <Tab.Screen
+          key="ChatbotTab"
+          name="ChatbotTab"
+          component={ChatbotScreen}
+          options={{
+            tabBarLabel: 'Chat',
+            tabBarIcon: () => <Text style={{ fontSize: 24 }}>💬</Text>,
+            unmountOnBlur: true,
+          }}
+        />
+      ) : (
+        <Tab.Screen
+          key="DoctorCalendarTab"
+          name="DoctorCalendarTab"
+          component={DoctorCalendarScreen}
+          options={{
+            tabBarLabel: 'Calendario',
+            tabBarIcon: () => <Text style={{ fontSize: 24 }}>🗓️</Text>,
+          }}
+        />
+      )}
 
+      {/* 4. Perfil */}
       <Tab.Screen
         name="ProfileTab"
         component={ProfileScreen}

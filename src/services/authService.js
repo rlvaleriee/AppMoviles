@@ -26,8 +26,8 @@ export async function registerUser(payload) {
     specialty: role === 'doctor' ? (specialty || null) : null,
     clinicAddress: role === 'doctor' ? (clinicAddress || null) : null,
     photoURL: cred.user.photoURL || null,
-    location: null,      // se establecerá luego
-    geohash: null,       // la calculará una Function al guardar location
+    location: null,      
+    geohash: null,       
     acceptsNewPatients: role === 'doctor' ? true : null,
     ratingAvg: role === 'doctor' ? 0 : null,
     ratingCount: role === 'doctor' ? 0 : null,

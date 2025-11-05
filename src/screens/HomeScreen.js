@@ -27,7 +27,8 @@ export default function HomeScreen({ navigation }) {
     if (currentUserData?.role === 'patient') {
       loadNearbyDoctors();
     } else if (currentUserData?.role === 'doctor') {
-      loadDoctorStats();
+      const unsubscribe = loadDoctorStats();
+      return () => unsubscribe && unsubscribe();
     }
   }, [currentUserData]);
 
@@ -35,13 +36,12 @@ export default function HomeScreen({ navigation }) {
     try {
       setLoading(true);
 
-      // 1. Intentar obtener ubicación guardada del usuario
+      // 1. Ubicación guardada
       let location = currentUserData?.location;
 
-      // 2. Si no tiene ubicación guardada, intentar obtener ubicación actual
+      // 2. Si no hay, pedir permisos
       if (!location?.latitude || !location?.longitude) {
         const { status } = await Location.requestForegroundPermissionsAsync();
-
         if (status === 'granted') {
           const currentLocation = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
@@ -52,7 +52,6 @@ export default function HomeScreen({ navigation }) {
           };
           setUserLocation(location);
         } else {
-          // Sin ubicación, no podemos mostrar doctores cercanos
           setLoading(false);
           return;
         }
@@ -61,7 +60,7 @@ export default function HomeScreen({ navigation }) {
       }
 
       // 3. Obtener doctores cercanos
-      const doctors = await getNearbyDoctors(location, 50); // Hasta 50km de distancia
+      const doctors = await getNearbyDoctors(location, 50);
       setNearbyDoctors(doctors);
     } catch (error) {
       console.error('Error cargando doctores cercanos:', error);
@@ -72,8 +71,11 @@ export default function HomeScreen({ navigation }) {
   };
 
   const loadDoctorStats = () => {
-    if (!currentUserData?.uid) return;
-
+    if (!currentUserData?.uid) {
+      setLoading(false);
+      setDoctorStats({ pending: 0, todayAppts: 0, total: 0 });
+      return;
+    }
     setLoading(true);
     const unsubscribe = listenAppointmentsByUser({
       uid: currentUserData.uid,
@@ -84,7 +86,7 @@ export default function HomeScreen({ navigation }) {
 
         const pending = appointments.filter((a) => a.status === 'requested').length;
         const todayAppts = appointments.filter((a) => {
-          const apptDate = a.slotStart?.toDate();
+          const apptDate = a.slotStart?.toDate?.() || a.slotStart;
           return apptDate && apptDate >= today && apptDate < new Date(today.getTime() + 86400000);
         }).length;
         const total = appointments.length;
@@ -93,16 +95,28 @@ export default function HomeScreen({ navigation }) {
         setLoading(false);
       },
     });
-
     return unsubscribe;
   };
 
   const handleLogout = async () => {
-    try {
-      await logout();
-    } catch (e) {
-      Alert.alert('Error', e?.message || 'No se pudo cerrar sesión');
-    }
+    Alert.alert(
+      'Cerrar sesión',
+      '¿Estás seguro que deseas cerrar sesión?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, cerrar sesión',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+            } catch (e) {
+              Alert.alert('Error', e?.message || 'No se pudo cerrar sesión');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const renderDoctorItem = ({ item }) => (
@@ -111,9 +125,9 @@ export default function HomeScreen({ navigation }) {
       onPress={() => navigation.navigate('DoctorDetail', { doctorId: item.id })}
     >
       <View style={styles.doctorInfo}>
-        <Text style={styles.doctorName}>{item.name}</Text>
-        <Text style={styles.doctorSpecialty}>{item.specialty}</Text>
-        <Text style={styles.doctorDistance}>📍 {item.distance} km</Text>
+        <Text style={styles.doctorName}>Dr. {item.name} {item.lastName || ''}</Text>
+        <Text style={styles.doctorSpecialty}>{item.cssp?.profession || item.specialty || 'Médico General'}</Text>
+        <Text style={styles.doctorDistance}>📍 {item.distance.toFixed(1)} km</Text>
         {item.clinicAddress && (
           <Text style={styles.doctorAddress} numberOfLines={1}>
             {item.clinicAddress}
@@ -121,28 +135,24 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
       <View style={styles.arrowContainer}>
-        <Text style={styles.arrow}>›</Text>
+        <Ionicons name="chevron-forward" size={24} color="#2196F3" />
       </View>
     </TouchableOpacity>
   );
 
-  // Vista para pacientes
+  // ================== VISTA PACIENTE ==================
   if (currentUserData?.role === 'patient') {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={styles.title}>Doctores Cercanos</Text>
+            <Text style={styles.headerTitle}>Doctores Cercanos</Text>
             {currentUserData?.name && (
-              <Text style={styles.subtitle}>Hola, {currentUserData.name}</Text>
+              <Text style={styles.headerSubtitle}>Hola, {currentUserData.name}</Text>
             )}
           </View>
-          <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="log-out-outline" size={24} color="#1976D2" />
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
+            <Ionicons name="log-out-outline" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
@@ -170,9 +180,7 @@ export default function HomeScreen({ navigation }) {
           />
         ) : (
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              No hay doctores cercanos disponibles
-            </Text>
+            <Text style={styles.emptyText}>No hay doctores cercanos disponibles</Text>
             <Text style={styles.emptySubtext}>
               {!userLocation
                 ? 'Activa los permisos de ubicación para ver doctores cercanos'
@@ -183,36 +191,23 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         )}
-
-        <View style={styles.footer}>
-          <TouchableOpacity
-            style={styles.btnFullWidth}
-            onPress={() => navigation.navigate('AppointmentCreate')}
-          >
-            <Text style={styles.btnText}>Nueva cita</Text>
-          </TouchableOpacity>
-        </View>
       </View>
     );
   }
 
-  // Vista para doctores
+  // ================== VISTA DOCTOR ==================
   if (currentUserData?.role === 'doctor') {
     return (
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={styles.title}>Panel de Doctor</Text>
+            <Text style={styles.headerTitle}>Panel de Doctor</Text>
             {currentUserData?.name && (
-              <Text style={styles.subtitle}>Dr. {currentUserData.name}</Text>
+              <Text style={styles.headerSubtitle}>Dr. {currentUserData.name}</Text>
             )}
           </View>
-          <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="log-out-outline" size={24} color="#1976D2" />
+          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
+            <Ionicons name="log-out-outline" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
@@ -223,7 +218,6 @@ export default function HomeScreen({ navigation }) {
             </View>
           ) : (
             <>
-              {/* Tarjetas de estadísticas */}
               <View style={styles.statsContainer}>
                 <View style={styles.statCard}>
                   <Text style={styles.statNumber}>{doctorStats?.pending || 0}</Text>
@@ -240,45 +234,27 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.statLabel}>Total de citas</Text>
               </View>
 
-              {/* Información profesional */}
+              {(!doctorStats || doctorStats.total === 0) && (
+                <View style={styles.infoCard}>
+                  <Text style={styles.infoLabel}>¡Bienvenido!</Text>
+                  <Text style={styles.infoValue}>
+                    Aún no tienes citas registradas. Configura tu disponibilidad para que los pacientes puedan solicitar citas.
+                  </Text>
+                </View>
+              )}
+
               {currentUserData?.specialty && (
                 <View style={styles.infoCard}>
                   <Text style={styles.infoLabel}>Especialidad</Text>
                   <Text style={styles.infoValue}>{currentUserData.specialty}</Text>
                 </View>
               )}
-
               {currentUserData?.clinicAddress && (
                 <View style={styles.infoCard}>
                   <Text style={styles.infoLabel}>Consultorio</Text>
                   <Text style={styles.infoValue}>{currentUserData.clinicAddress}</Text>
                 </View>
               )}
-
-              {/* Botones de acción */}
-              <View style={styles.actionButtons}>
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => navigation.navigate('Appointments')}
-                >
-                  <Text style={styles.actionIcon}>📅</Text>
-                  <Text style={styles.actionTitle}>Ver Citas</Text>
-                  <Text style={styles.actionDescription}>
-                    Administra tus citas programadas
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionCard}
-                  onPress={() => navigation.navigate('Profile')}
-                >
-                  <Text style={styles.actionIcon}>👤</Text>
-                  <Text style={styles.actionTitle}>Mi Perfil</Text>
-                  <Text style={styles.actionDescription}>
-                    Actualiza tu información profesional
-                  </Text>
-                </TouchableOpacity>
-              </View>
             </>
           )}
         </ScrollView>
@@ -286,23 +262,17 @@ export default function HomeScreen({ navigation }) {
     );
   }
 
-  // Vista por defecto (otros roles)
+  // ================== VISTA POR DEFECTO ==================
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.title}>Inicio</Text>
-          {currentUserData?.name && (
-            <Text style={styles.subtitle}>Hola, {currentUserData.name}</Text>
-          )}
+          <Text style={styles.headerTitle}>Inicio</Text>
+          {currentUserData?.name && <Text style={styles.headerSubtitle}>Hola, {currentUserData.name}</Text>}
         </View>
-        
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={handleLogout}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="log-out-outline" size={24} color="#1976D2" />
+
+        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.7}>
+          <Ionicons name="log-out-outline" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
     </View>
@@ -310,81 +280,48 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
+  // --- generales ---
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+
+  // Header con el MISMO diseño que el calendario
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    justifyContent: 'space-between',
+    backgroundColor: '#2196F3',
+    paddingTop: 50,         // mismo padding superior
+    paddingBottom: 20,      // mismo padding inferior
+    paddingHorizontal: 20,  // mismo padding horizontal
   },
-  headerLeft: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#2196F3',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#555',
-  },
+  headerLeft: { flex: 1 },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
+  headerSubtitle: { fontSize: 14, color: '#E3F2FD' },
   logoutButton: {
-  width: 44,
-  height: 44,
-  borderRadius: 22,
-  backgroundColor: '#E3F2FD',
-  justifyContent: 'center',
-  alignItems: 'center',
-  marginLeft: 12,
-  borderWidth: 1,
-  borderColor: '#BBDEFB',
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.1,
-  shadowRadius: 3,
-  elevation: 2,
-  },
-  scrollContent: {
-    flex: 1,
-  },
-  scrollContainer: {
-    padding: 16,
-    paddingBottom: 32,
-  },
-  loadingContainer: {
-    flex: 1,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1976D2', // contraste sobre el header
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 60,
+    marginLeft: 12,
+    borderWidth: 1,
+    borderColor: '#64B5F6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#666',
-  },
-  listContainer: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-  infoBox: {
-    backgroundColor: '#E3F2FD',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  infoText: {
-    color: '#1976D2',
-    fontSize: 14,
-    textAlign: 'center',
-  },
+
+  scrollContent: { flex: 1 },
+  scrollContainer: { padding: 16, paddingBottom: 32 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 60 },
+  loadingText: { marginTop: 12, fontSize: 16, color: '#666' },
+
+  // --- pacientes ---
+  listContainer: { padding: 16, paddingBottom: 100 },
+  infoBox: { backgroundColor: '#E3F2FD', padding: 12, borderRadius: 8, marginBottom: 16 },
+  infoText: { color: '#1976D2', fontSize: 14, textAlign: 'center' },
   doctorCard: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -398,168 +335,50 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  doctorInfo: {
-    flex: 1,
-  },
-  doctorName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 4,
-  },
-  doctorSpecialty: {
-    fontSize: 14,
-    color: '#2196F3',
-    marginBottom: 4,
-  },
-  doctorDistance: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 4,
-  },
-  doctorAddress: {
-    fontSize: 12,
-    color: '#999',
-  },
-  arrowContainer: {
-    marginLeft: 8,
-  },
-  arrow: {
-    fontSize: 28,
-    color: '#2196F3',
-    fontWeight: '300',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
+  doctorInfo: { flex: 1 },
+  doctorName: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 4 },
+  doctorSpecialty: { fontSize: 14, color: '#2196F3', marginBottom: 4 },
+  doctorDistance: { fontSize: 14, color: '#666', marginBottom: 4 },
+  doctorAddress: { fontSize: 12, color: '#999' },
+  arrowContainer: { marginLeft: 8 },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
+  emptyText: { fontSize: 18, fontWeight: '600', color: '#666', textAlign: 'center', marginBottom: 8 },
+  emptySubtext: { fontSize: 14, color: '#999', textAlign: 'center', marginBottom: 20 },
   footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 16,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#e0e0e0',
+    position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, backgroundColor: '#fff',
+    borderTopWidth: 1, borderTopColor: '#e0e0e0',
   },
   btn: {
-    flex: 1,
-    backgroundColor: '#2196F3',
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 8,
-    alignItems: 'center',
+    flex: 1, backgroundColor: '#2196F3', paddingVertical: 12, paddingHorizontal: 18,
+    borderRadius: 8, alignItems: 'center',
   },
   btnFullWidth: {
-    backgroundColor: '#2196F3',
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    borderRadius: 8,
-    alignItems: 'center',
+    backgroundColor: '#2196F3', paddingVertical: 14, paddingHorizontal: 18,
+    borderRadius: 8, alignItems: 'center',
   },
-  btnText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  // Estilos para vista de doctor
-  statsContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
+  btnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  // --- doctor ---
+  statsContainer: { flexDirection: 'row', gap: 12, marginBottom: 12, paddingHorizontal: 16, paddingTop: 16 },
   statCard: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 20, alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
   },
-  totalCard: {
-    marginBottom: 16,
-  },
-  statNumber: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#2196F3',
-    marginBottom: 8,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-  },
+  totalCard: { marginBottom: 16, marginHorizontal: 16 },
+  statNumber: { fontSize: 36, fontWeight: '700', color: '#2196F3', marginBottom: 8 },
+  statLabel: { fontSize: 14, color: '#666', textAlign: 'center' },
   infoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: '#fff', borderRadius: 12, padding: 16, marginBottom: 12, marginHorizontal: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
   },
-  infoLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  infoValue: {
-    fontSize: 16,
-    color: '#333',
-    fontWeight: '600',
-  },
-  actionButtons: {
-    marginTop: 8,
-    gap: 12,
-  },
+  infoLabel: { fontSize: 12, color: '#999', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+  infoValue: { fontSize: 16, color: '#333', fontWeight: '600' },
+  actionButtons: { marginTop: 8, gap: 12 },
   actionCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: '#fff', borderRadius: 12, padding: 20, shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
   },
-  actionIcon: {
-    fontSize: 32,
-    marginBottom: 12,
-  },
-  actionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 6,
-  },
-  actionDescription: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-  },
+  actionIcon: { fontSize: 32, marginBottom: 12 },
+  actionTitle: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 6 },
+  actionDescription: { fontSize: 14, color: '#666', lineHeight: 20 },
 });
