@@ -58,7 +58,6 @@ export const getDoctors = async (specialty = '') => {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 };
 
-// Suscripción en vivo a doctores (útil para listas reactivas)
 export const subscribeDoctors = (cb, specialty = '') => {
   const base = collection(db, 'users');
   let q = query(base, where('role', '==', 'doctor'));
@@ -84,7 +83,7 @@ export const createAppointment = async ({
   patientId,
   doctorId,
   reason = '',
-  slotStart, // Date | string ISO | Timestamp
+  slotStart, 
 }) => {
   let ts = slotStart;
   if (typeof slotStart === 'string') {
@@ -123,13 +122,34 @@ export const getAppointmentsForUser = async (uid, role = 'patient') => {
 
 // Suscribe citas del usuario (por rol)
 export const subscribeAppointmentsForUser = (uid, role = 'patient', cb) => {
+  console.log('[Firestore] Suscribiendo a appointments para uid:', uid, 'campo:', role === 'doctor' ? 'doctorId' : 'patientId');
   const base = collection(db, 'appointments');
   const field = role === 'doctor' ? 'doctorId' : 'patientId';
-  const q = query(base, where(field, '==', uid), orderBy('slotStart', 'asc'));
+
+  const q = query(base, where(field, '==', uid));
+
   return onSnapshot(
     q,
-    (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-    (err) => console.warn('[Firestore] appointments subscribe error:', err)
+    (snap) => {
+      console.log('[Firestore] Snapshot recibido, documentos:', snap.size);
+      const docs = snap.docs.map((d) => {
+        const data = d.data();
+        console.log('[Firestore] Doc:', d.id, 'status:', data.status, 'slotStart:', data.slotStart);
+        return { id: d.id, ...data };
+      });
+      // Ordenar manualmente por slotStart
+      docs.sort((a, b) => {
+        const aTime = a.slotStart?.toMillis?.() || 0;
+        const bTime = b.slotStart?.toMillis?.() || 0;
+        return aTime - bTime;
+      });
+      cb(docs);
+    },
+    (err) => {
+      console.error('[Firestore] appointments subscribe error:', err);
+      console.error('[Firestore] Error code:', err.code);
+      console.error('[Firestore] Error message:', err.message);
+    }
   );
 };
 

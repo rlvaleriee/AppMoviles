@@ -220,7 +220,7 @@ export default function HomeScreen({ navigation }) {
             <>
               <View style={styles.statsContainer}>
                 <View style={styles.statCard}>
-                  <Text style={styles.statNumber}>{doctorStats?.pending || 0}</Text>
+                  <Text style={styles.statNumber}>{doctorStats?.requested || 0}</Text>
                   <Text style={styles.statLabel}>Solicitudes pendientes</Text>
                 </View>
                 <View style={styles.statCard}>
@@ -283,15 +283,14 @@ const styles = StyleSheet.create({
   // --- generales ---
   container: { flex: 1, backgroundColor: '#f5f5f5' },
 
-  // Header con el MISMO diseño que el calendario
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#2196F3',
-    paddingTop: 50,         // mismo padding superior
-    paddingBottom: 20,      // mismo padding inferior
-    paddingHorizontal: 20,  // mismo padding horizontal
+    paddingTop: 50,         
+    paddingBottom: 20,      
+    paddingHorizontal: 20,  
   },
   headerLeft: { flex: 1 },
   headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
@@ -300,7 +299,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#1976D2', // contraste sobre el header
+    backgroundColor: '#1976D2', 
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 12,
