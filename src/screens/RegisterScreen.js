@@ -18,7 +18,7 @@ import {
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/index';
-import { app } from '../firebase'; // para Storage
+import { app } from '../firebase'; 
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
@@ -26,7 +26,7 @@ import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
-const GEOAPIFY_KEY = '18200d83a8c440c2b3421eff1cf14a35'; // ej: '18200d83a8c440c2b3421eff1cf14a35'
+const GEOAPIFY_KEY = '18200d83a8c440c2b3421eff1cf14a35'; 
 
 // Juntas de Vigilancia (CSSP y afines de salud)
 const BOARD_OPTIONS = [
@@ -46,21 +46,85 @@ const BOARD_OPTIONS = [
   'Otros (escribir)',
 ];
 
-// Profesiones
+// Profesiones según CONADEM
 const PROFESSION_OPTIONS = [
-  'Doctor(a) en Medicina',
-  'Odontólogo(a)',
-  'Farmacéutico(a)',
-  'Químico(a)',
-  'Biólogo(a)',
-  'Psicólogo(a)',
-  'Enfermero(a)',
-  'Médico Veterinario',
-  'Tecnólogo(a) Médico(a) / Laboratorista',
-  'Nutricionista / Dietista',
-  'Fisioterapeuta / Terapeuta Físico',
-  'Fonoaudiólogo(a) / Terapeuta del Lenguaje',
-  'Trabajador(a) Social en Salud',
+  'DOCTOR(A)EN MEDICINA',
+  'LIC. FISIOTERAPIA Y TERAPIA OCUPACIONAL',
+  'LIC. EN SALUD MATERNO INFANTIL',
+  'LIC. EN NUTRICION Y DIETETICA',
+  'LIC. EN ANESTESIOLOGIA E INHALOTERAPIA',
+  'LIC. EN RADIOLOGIA E IMÁGENES',
+  'TEC. OPTOMETRIA',
+  'TEC. EN ORTESIS Y PROTESIS',
+  'TECNOLOGO(A) EN RADIOTECNOLOGIA',
+  'TECNOLOGO(A) EN FISIOTERAPIA',
+  'TECNOLOGO(A) EN ANESTESIOLOGIA',
+  'TEC. AUX. AUDIOMETRIA Y AUDIOPROTESIS',
+  'TECNOLOGO(A) EN SALUD MATERNO INFANTIL',
+  'TERAPIA FISICA',
+  'TECNOLOGO(A) EN TERAPIA DE LENGUAJE',
+  'TEC. EN TERAPIA OCUPACIONAL',
+  'TECNOLOGO(A) EN HIGIENE MATERNAL',
+  'TECNOLOGO(A) EN HIGIENE INFANTIL',
+  'TERAPIA RESPIRATORIA',
+  'TEC. PRACTICO EN AUDIOMETRIA',
+  'TEC.) EN SALUD AMBIENTAL',
+  'DOCTOR(A) EN QUIROPRACTICO',
+  'TEC. PRACTICO EN RAYOS X',
+  'TEC. PRACTICO EN MEDICINA NUCLEAR',
+  'TEC. EN AUDIOLOGIA',
+  'TEC. PRACTICO COBALTO',
+  'TEC. FISIATRIA',
+  'AUX. EN AUDIOLOGIA',
+  'AUX. EN AUDIOPROTESIS',
+  'LIC. EN EDUCACION PARA LA SALUD',
+  'TECNOLOGO EN RADIOLOGIA E IMAGENES',
+  'LIC. EN OPTOMETRIA',
+  'LIC. EN SALUD EN TERAPIA FISICA ',
+  'LIC. EN SALUD HIGIENE Y EPIDEMIOLOGIA',
+  'LIC. EN FONOAUDIOLOGIA',
+  'LICENCIADO(A) EN ORTESIS Y PROTESIS',
+  'LIC. EN SALUD PERFIL TRAUMATOLOGIA',
+  'LICENCIADO(A) EN SALUD AMBIENTAL',
+  'QUIROPRACTICO',
+  'TEC. ESP. EN ANATOMIA PATOLOGICA',
+  'LICENCIADO(A) EN TERAPIA FISICA',
+  'LIC. EN FISIOTERAPIA',
+  'LIC. EN NUTRICION',
+  'MEDICO(A) INTEGRAL COMUNITARIO',
+  'INGENIERIA BIOMEDICA',
+  'LIC. EN REHABILITACION EN SALUD',
+  'TECNOLOGO EN TERAPIA OCUPACIONAL',
+  'TEC. EN INGENIERIA BIOMEDICA',
+  'TEC. EN EMERGENCIA SANITARIA',
+  'LICENCIATURA EN EMERGENCIA PREHOSPITALARIA',
+  'LICENCIATURA EN RADIOTERAPIA',
+  'DOCTOR(A) EN CIRUGÍA DENTAL',
+  'HIGIENISTA',
+  'ASISTENTES DENTALES',
+  'MECANICO(A) DENTAL',
+  'LIC. EN ENFERMERIA',
+  'ENFERMERO(A) GRADUADO',
+  'AUXILIAR DE ENFERMERIA',
+  'TECNICO(A) EN ENFERMERIA',
+  'TECNOLOGO(A) EN ENFERMERIA',
+  'LIC. EN LABORATORIO CLINICO',
+  'TEC. EN LABORATORIO CLINICO',
+  'LIC. EN BIO ANALISIS CLINICO',
+  'LIC. EN BACTERIOLOGIA Y LABORATORISTA CLINICO',
+  'LICENCIADO(A) EN PSICOLOGIA',
+  'LIC. EN QUIMICA Y FARMACIA',
+  'INGENIERIA QUIMICA',
+  'IDONEOS',
+  'AUXILIAR DE FARMACIA',
+  'DOCTOR(A) EN QUIMICA Y FARMACIA',
+  'LIC. EN CIENCIAS QUIMICAS',
+  'LIC. EN QUIMICA AGRICOLA',
+  'LIC. EN QUIMICA',
+  'DOCTOR(A) EN QUIMICA INDUSTRIAL',
+  'LIC. EN QUIMICA INDUSTRIAL',
+  'MÉDICO(A) VETERINARIO',
+  'TECNICO(A) EN MÉDICINA VETERINARIA',
   'Otros (escribir)',
 ];
 
