@@ -60,7 +60,6 @@ export default function AppointmentsScreen() {
       }
     );
 
-    // Fallback anti-atasco
     const safety = setTimeout(() => {
       setLoading(false);
       setRefreshing(false);
@@ -109,7 +108,7 @@ export default function AppointmentsScreen() {
 
   const getStatusColor = (status) => {
     switch (status) {
-      case 'requested': return '#FFA726';
+      case 'requested': return '#FFA726'; 
       case 'accepted':  return '#66BB6A';
       case 'rejected':  return '#EF5350';
       case 'cancelled': return '#9E9E9E';
@@ -120,10 +119,10 @@ export default function AppointmentsScreen() {
 
   const getStatusIcon = (status) => {
     switch (status) {
-      case 'requested': return 'clock-outline';
+      case 'requested': return 'time-outline';            
       case 'accepted':  return 'checkmark-circle';
       case 'rejected':  return 'close-circle';
-      case 'cancelled': return 'ban';
+      case 'cancelled': return 'close-circle-outline';    
       case 'completed': return 'checkmark-done-circle';
       default:          return 'help-circle';
     }
@@ -140,7 +139,10 @@ export default function AppointmentsScreen() {
     }
   };
 
-  const filteredRows = filter === 'all' ? rows : rows.filter((r) => r.status === filter);
+  const filteredRows =
+    filter === 'all'
+      ? rows
+      : rows.filter((r) => r.status === filter);
 
   const renderItem = ({ item }) => {
     const slotDate =
@@ -163,7 +165,11 @@ export default function AppointmentsScreen() {
         {/* Header de la tarjeta */}
         <View style={styles.cardHeader}>
           <View style={styles.statusBadge}>
-            <Ionicons name={getStatusIcon(item.status)} size={18} color={getStatusColor(item.status)} />
+            <Ionicons
+              name={getStatusIcon(item.status)}
+              size={18}
+              color={getStatusColor(item.status)}
+            />
             <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
               {getStatusLabel(item.status)}
             </Text>
@@ -285,7 +291,6 @@ export default function AppointmentsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header (idéntico a Home) */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.title}>{isDoctor ? 'Solicitudes de Citas' : 'Mis Citas'}</Text>
@@ -294,7 +299,6 @@ export default function AppointmentsScreen() {
           </Text>
         </View>
 
-        {/* Botón redondo a la derecha (refresh) */}
         <TouchableOpacity
           onPress={onRefresh}
           activeOpacity={0.85}
@@ -310,20 +314,49 @@ export default function AppointmentsScreen() {
           style={[styles.filterBtn, filter === 'all' && styles.filterBtnActive]}
           onPress={() => setFilter('all')}
         >
-          <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>Todas</Text>
+          <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>
+            Todas
+          </Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.filterBtn, filter === 'requested' && styles.filterBtnActive]}
           onPress={() => setFilter('requested')}
         >
-          <Text style={[styles.filterText, filter === 'requested' && styles.filterTextActive]}>Pendientes</Text>
+          <Text style={[styles.filterText, filter === 'requested' && styles.filterTextActive]}>
+            Pendientes
+          </Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.filterBtn, filter === 'accepted' && styles.filterBtnActive]}
           onPress={() => setFilter('accepted')}
         >
-          <Text style={[styles.filterText, filter === 'accepted' && styles.filterTextActive]}>Aceptadas</Text>
+          <Text style={[styles.filterText, filter === 'accepted' && styles.filterTextActive]}>
+            Aceptadas
+          </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.filterBtn, filter === 'rejected' && styles.filterBtnActive]}
+          onPress={() => setFilter('rejected')}
+        >
+          <Text style={[styles.filterText, filter === 'rejected' && styles.filterTextActive]}>
+            Rechazadas
+          </Text>
+        </TouchableOpacity>
+
+        {/* Para ver canceladas, descomentar esto */}
+        {/*
+        <TouchableOpacity
+          style={[styles.filterBtn, filter === 'cancelled' && styles.filterBtnActive]}
+          onPress={() => setFilter('cancelled')}
+        >
+          <Text style={[styles.filterText, filter === 'cancelled' && styles.filterTextActive]}>
+            Canceladas
+          </Text>
+        </TouchableOpacity>
+        */}
       </View>
 
       {/* Lista de citas */}
@@ -337,7 +370,11 @@ export default function AppointmentsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#2196F3']} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#2196F3']}
+          />
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -361,15 +398,14 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' },
   loadingText: { marginTop: 12, fontSize: 16, color: '#666' },
 
-  // ===== Header (idéntico a Home azul) =====
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#2196F3',
-    paddingTop: 50,        // mismo padding superior que Home
-    paddingBottom: 20,     // mismo padding inferior que Home
-    paddingHorizontal: 20, // mismo padding horizontal que Home
+    paddingTop: 50,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
   },
   headerLeft: { flex: 1 },
   title: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
@@ -378,7 +414,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#1976D2', // igual al botón del Home
+    backgroundColor: '#1976D2',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 12,
@@ -392,10 +428,22 @@ const styles = StyleSheet.create({
   },
 
   // Filtros
-  filterContainer: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#fff' },
+  filterContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+  },
   filterBtn: {
-    flex: 1, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20, backgroundColor: '#f5f5f5',
-    borderWidth: 1, borderColor: '#e0e0e0', alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#f5f5f5',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    alignItems: 'center',
   },
   filterBtnActive: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
   filterText: { fontSize: 13, fontWeight: '600', color: '#666' },
@@ -407,33 +455,89 @@ const styles = StyleSheet.create({
 
   // Card
   card: {
-    backgroundColor: '#fff', borderRadius: 12, marginBottom: 12,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, overflow: 'hidden',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    overflow: 'hidden',
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
   statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusText: { fontSize: 14, fontWeight: '700' },
-  pastBadge: { backgroundColor: '#FFF3E0', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  pastBadge: {
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
   pastText: { fontSize: 11, fontWeight: '600', color: '#F57C00' },
 
   cardBody: { paddingHorizontal: 16, paddingVertical: 12, gap: 16 },
   infoRow: { flexDirection: 'row', gap: 12 },
   infoContent: { flex: 1 },
   infoLabel: { fontSize: 12, color: '#999', marginBottom: 4, fontWeight: '600' },
-  infoValue: { fontSize: 15, color: '#333', fontWeight: '600', marginBottom: 2, textTransform: 'capitalize' },
+  infoValue: {
+    fontSize: 15,
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 2,
+    textTransform: 'capitalize',
+  },
   infoTime: { fontSize: 20, color: '#2196F3', fontWeight: '700' },
   infoSubtext: { fontSize: 13, color: '#666', marginTop: 2 },
 
-  cardActions: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 8 },
+  cardActions: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    paddingTop: 8,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
   acceptBtn: { backgroundColor: '#66BB6A' },
   rejectBtn: { backgroundColor: '#EF5350' },
   cancelBtn: { backgroundColor: '#9E9E9E' },
   actionBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   // Vacío
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 60, paddingHorizontal: 32 },
-  emptyText: { fontSize: 18, fontWeight: '600', color: '#666', textAlign: 'center', marginTop: 16, marginBottom: 8 },
-  emptySubtext: { fontSize: 14, color: '#999', textAlign: 'center', lineHeight: 20 },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 32,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
 });
