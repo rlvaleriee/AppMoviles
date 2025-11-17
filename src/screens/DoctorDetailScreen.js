@@ -11,6 +11,9 @@ import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { createAppointment } from '../services/firestore';
 
+// 👇 nuevo helper
+import { buildSlotsFromRanges } from '../services/slotUtils';
+
 /* ========= helpers ========= */
 const toStartOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const toEndOfDay   = (d) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
@@ -31,7 +34,7 @@ const fetchAvailabilityForDate = async (doctorId, date) => {
     const ref = doc(db, 'users', doctorId, 'availabilities', id);
     const snap = await getDoc(ref);
     if (!snap.exists()) return null;
-    return snap.data(); // { ranges?: [{start,end}], slotDuration? }
+    return snap.data(); // { ranges?: [{start,end}], slotDuration?, slots? }
   } catch (e) {
     console.log('fetchAvailabilityForDate error =>', e);
     return null;
@@ -121,63 +124,6 @@ export default function DoctorDetailScreen({ route, navigation }) {
     })();
   }, [doctorId, navigation]);
 
-  // Regenerar slots al cambiar fecha
-  useEffect(() => {
-    if (!selectedDate) { setDaySlots([]); return; }
-
-    (async () => {
-      console.log('[DETALLE] regenerando para', dateKey(selectedDate));
-      const perDate = await fetchAvailabilityForDate(doctorId, selectedDate);
-
-      let slots = [];
-
-      if (perDate?.ranges && Array.isArray(perDate.ranges) && perDate.ranges.length > 0) {
-        // MODO BLOQUES GUARDADOS: 1 botón por bloque (HH:mm – HH:mm)
-        slots = perDate.ranges
-          .map((r) => {
-            if (!r?.start || !r?.end) return null;
-            const { h: sh, m: sm } = parseHHmm(String(r.start));
-            const { h: eh, m: em } = parseHHmm(String(r.end));
-            const start = new Date(selectedDate); start.setHours(sh, sm, 0, 0);
-            const end   = new Date(selectedDate); end.setHours(eh, em, 0, 0);
-            if (end <= start) return null;
-            const label = `${two(sh)}:${two(sm)} – ${two(eh)}:${two(em)}`;
-            return { timeLabel: label, start, end };
-          })
-          .filter(Boolean);
-      } else if (docData?.schedule) {
-        // SIN BLOQUES por fecha → usar schedule
-        const wd = selectedDate.getDay();
-        const ranges = docData.schedule.days?.[String(wd)] || [];
-        const duration = docData.schedule.slotDuration || 30;
-        for (const r of ranges) {
-          const { h: sh, m: sm } = parseHHmm(r.start);
-          const { h: eh, m: em } = parseHHmm(r.end);
-          const rangeStart = new Date(selectedDate); rangeStart.setHours(sh, sm, 0, 0);
-          const rangeEnd   = new Date(selectedDate); rangeEnd.setHours(eh, em, 0, 0);
-          let cur = new Date(rangeStart);
-          while (addMinutes(cur, duration) <= rangeEnd) {
-            const next = addMinutes(cur, duration);
-            const label = `${two(cur.getHours())}:${two(cur.getMinutes())}`;
-            slots.push({ timeLabel: label, start: new Date(cur), end: next });
-            cur = next;
-          }
-        }
-      }
-
-      // marcar ocupados/pasados
-      const busy = await fetchBusySet(doctorId, selectedDate);
-      const accepts = docData?.acceptsNewPatients !== false;
-      const merged = slots.map(s => ({
-        ...s,
-        available: accepts && !busy.has(s.start.getTime()) && isAfterNow(s.start),
-      }));
-
-      console.log('[DETALLE] bloques leídos:', perDate?.ranges, '→ slots mostrados:', merged.length);
-      setDaySlots(merged);
-    })();
-  }, [selectedDate, doctorId, docData?.schedule, docData?.acceptsNewPatients]);
-
   // Ocupados del día
   const fetchBusySet = async (doctorId, date) => {
     const dayStart = Timestamp.fromDate(toStartOfDay(date));
@@ -198,6 +144,71 @@ export default function DoctorDetailScreen({ route, navigation }) {
     return set;
   };
 
+  // Regenerar slots al cambiar fecha
+  useEffect(() => {
+    if (!selectedDate) { setDaySlots([]); return; }
+
+    (async () => {
+      console.log('[DETALLE] regenerando para', dateKey(selectedDate));
+      const perDate = await fetchAvailabilityForDate(doctorId, selectedDate);
+
+      let slots = [];
+
+      // 1) si el doc trae 'slots' (array de "HH:mm"), lo usamos directo
+      if (Array.isArray(perDate?.slots) && perDate.slots.length) {
+        const duration = perDate.slotDuration || 30;
+        slots = perDate.slots.map((s) => {
+          const { h, m } = parseHHmm(s);
+          const start = new Date(selectedDate); start.setHours(h, m, 0, 0);
+          const end   = addMinutes(start, duration);
+          return { timeLabel: s, start, end };
+        });
+      }
+      // 2) si trae 'ranges', generamos slots de 30 min (o lo que indique)
+      else if (perDate?.ranges && Array.isArray(perDate.ranges) && perDate.ranges.length > 0) {
+        const duration = perDate.slotDuration || 30;
+        slots = buildSlotsFromRanges(selectedDate, perDate.ranges, duration);
+      }
+      // 3) si no hay doc por fecha, usar horario base semanal
+      else if (docData?.schedule) {
+        const wd = selectedDate.getDay();
+        const ranges = docData.schedule.days?.[String(wd)] || [];
+        const duration = docData.schedule.slotDuration || 30;
+        for (const r of ranges) {
+          const { h: sh, m: sm } = parseHHmm(r.start);
+          const { h: eh, m: em } = parseHHmm(r.end);
+          const rangeStart = new Date(selectedDate); rangeStart.setHours(sh, sm, 0, 0);
+          const rangeEnd   = new Date(selectedDate); rangeEnd.setHours(eh, em, 0, 0);
+          let cur = new Date(rangeStart);
+          while (addMinutes(cur, duration) <= rangeEnd) {
+            const next = addMinutes(cur, duration);
+            const label = `${two(cur.getHours())}:${two(cur.getMinutes())}`;
+            slots.push({ timeLabel: label, start: new Date(cur), end: next });
+            cur = next;
+          }
+        }
+      }
+
+      // No dejes que el listener de citas tumbe la UI si le falta índice
+      let busy = new Set();
+      try {
+        busy = await fetchBusySet(doctorId, selectedDate);
+      } catch (err) {
+        console.warn('[DETALLE] appointments fallback:', err?.message || err);
+        busy = new Set();
+      }
+
+      const accepts = docData?.acceptsNewPatients !== false;
+      const merged = slots.map(s => ({
+        ...s,
+        available: accepts && !busy.has(s.start.getTime()) && isAfterNow(s.start),
+      }));
+
+      console.log('[DETALLE] bloques leídos:', perDate?.ranges, '→ slots mostrados:', merged.length);
+      setDaySlots(merged);
+    })();
+  }, [selectedDate, doctorId, docData?.schedule, docData?.acceptsNewPatients]);
+
   // Crear cita (acepta “HH:mm” o “HH:mm – HH:mm”)
   const handleRequestAppointment = async () => {
     if (!selectedDate || !selectedTime) {
@@ -211,7 +222,8 @@ export default function DoctorDetailScreen({ route, navigation }) {
       const start = new Date(selectedDate); start.setHours(h, m, 0, 0);
 
       // evitar doble reserva
-      const busy = await fetchBusySet(doctorId, selectedDate);
+      let busy = new Set();
+      try { busy = await fetchBusySet(doctorId, selectedDate); } catch {}
       if (busy.has(start.getTime())) {
         Alert.alert('Cupo no disponible', 'El cupo fue tomado por otro paciente. Elige otro.');
         setSelectedTime(null); return;
@@ -393,7 +405,7 @@ export default function DoctorDetailScreen({ route, navigation }) {
           )}
         </View>
 
-        {/* Horarios / Bloques */}
+        {/* Horarios */}
         {selectedDate && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Selecciona un horario</Text>
@@ -404,7 +416,29 @@ export default function DoctorDetailScreen({ route, navigation }) {
               </Text>
             ) : (
               <View style={styles.timeSlotsContainer}>
-                {daySlots.map(renderTimeSlot)}
+                {daySlots.map((s) => (
+                  <TouchableOpacity
+                    key={`${s.timeLabel}-${s.start.getTime()}`}
+                    style={[
+                      styles.timeSlot,
+                      selectedTime === s.timeLabel && styles.timeSlotSelected,
+                      !s.available && styles.timeSlotDisabled,
+                    ]}
+                    onPress={() => s.available && setSelectedTime(s.timeLabel)}
+                    disabled={!s.available}
+                  >
+                    <Text style={[
+                      styles.timeText,
+                      selectedTime === s.timeLabel && styles.timeTextSelected,
+                      !s.available && styles.timeTextDisabled,
+                    ]}>
+                      {s.timeLabel}
+                    </Text>
+                    {!s.available && (
+                      <Text style={styles.disabledLabel}>{isAfterNow(s.start) ? 'Ocupado' : 'Pasado'}</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
               </View>
             )}
           </View>
@@ -507,7 +541,7 @@ const styles = StyleSheet.create({
   timeSlotsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   timeSlot: {
     paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#fff', borderRadius: 8,
-    borderWidth: 1, borderColor: '#e0e0e0', minWidth: 120, alignItems: 'center',
+    borderWidth: 1, borderColor: '#e0e0e0', minWidth: 100, alignItems: 'center',
   },
   timeSlotSelected: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
   timeSlotDisabled: { backgroundColor: '#f5f5f5', borderColor: '#e0e0e0', opacity: 0.6 },

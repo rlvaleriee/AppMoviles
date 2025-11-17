@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,8 +18,15 @@ import {
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/index';
+import { app } from '../firebase'; // para Storage
 import * as Location from 'expo-location';
-import { MaterialCommunityIcons } from '@expo/vector-icons'; 
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+
+const GEOAPIFY_KEY = '18200d83a8c440c2b3421eff1cf14a35'; // ej: '18200d83a8c440c2b3421eff1cf14a35'
 
 // Juntas de Vigilancia (CSSP y afines de salud)
 const BOARD_OPTIONS = [
@@ -57,12 +64,15 @@ const PROFESSION_OPTIONS = [
   'Otros (escribir)',
 ];
 
+// Centro por defecto (San Salvador) 
+const DEFAULT_CENTER = { latitude: 13.6929, longitude: -89.2182 };
+
 export default function RegisterScreen({ navigation }) {
   // Rol
-  const [role, setRole] = useState('patient'); // 'doctor' | 'patient'
+  const [role, setRole] = useState('patient');
 
   // Campos comunes
-  const [name, setName] = useState(''); 
+  const [name, setName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -70,24 +80,40 @@ export default function RegisterScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  // Estados para mostrar/ocultar
+  // Mostrar/ocultar
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // Campos solo doctor 
+  // Solo doctor
   const [clinicAddress, setClinicAddress] = useState('');
 
-  // CSSP: Junta, Profesión, Nº de Junta
+  // CSSP
   const [board, setBoard] = useState('');
   const [profession, setProfession] = useState('');
   const [boardNumber, setBoardNumber] = useState('');
 
-  // (Opcional) Foto de perfil local (sin subir a Storage)
+  // Foto local
   const [profileUri, setProfileUri] = useState(null);
 
   // Geolocalización
-  const [location, setLocation] = useState(null);
+  const [location, setLocation] = useState(null); // { latitude, longitude }
   const [loadingLocation, setLoadingLocation] = useState(false);
+
+  // Picker de mapa
+  const [mapVisible, setMapVisible] = useState(false);
+  const [mapRegion, setMapRegion] = useState({
+    latitude: DEFAULT_CENTER.latitude,
+    longitude: DEFAULT_CENTER.longitude,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+  });
+  const [selectedCoord, setSelectedCoord] = useState(null);
+
+  // Autocomplete (Geoapify)
+  const [placesQuery, setPlacesQuery] = useState('');
+  const [placesResults, setPlacesResults] = useState([]);
+  const [searchingPlaces, setSearchingPlaces] = useState(false);
+  const searchTO = useRef(null);
 
   // Modales Junta/Profesión
   const [boardModalVisible, setBoardModalVisible] = useState(false);
@@ -106,7 +132,6 @@ export default function RegisterScreen({ navigation }) {
 
   const toggleRole = (nextRole) => {
     setRole(nextRole);
-    // Reset de errores y campos específicos del rol
     setErrors({});
     if (nextRole === 'patient') {
       setClinicAddress('');
@@ -120,15 +145,13 @@ export default function RegisterScreen({ navigation }) {
     }
   };
 
+  // -------- Ubicación actual --------
   const requestLocation = async () => {
     try {
       setLoadingLocation(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(
-          'Permisos de ubicación',
-          'Se requiere acceso a tu ubicación para mostrarte doctores cercanos.'
-        );
+        Alert.alert('Permisos de ubicación', 'Se requiere acceso a tu ubicación.');
         setLoadingLocation(false);
         return;
       }
@@ -149,28 +172,141 @@ export default function RegisterScreen({ navigation }) {
         if (formattedAddress) setAddress(formattedAddress);
       }
 
+      setMapRegion((prev) => ({ ...prev, latitude, longitude }));
       Alert.alert('Éxito', 'Ubicación obtenida correctamente');
     } catch (error) {
-      console.error('Error obteniendo ubicación:', error);
-      Alert.alert('Error', 'No se pudo obtener tu ubicación. Intenta nuevamente.');
+      Alert.alert('Error', 'No se pudo obtener tu ubicación.');
     } finally {
       setLoadingLocation(false);
     }
   };
 
-  const pickImage = async () => {
-    try {
-      const { requestMediaLibraryPermissionsAsync, launchImageLibraryAsync, MediaTypeOptions } =
-        await import('expo-image-picker');
+  // -------- Map Picker --------
+  const openMapPicker = () => {
+    const center = location || DEFAULT_CENTER;
+    setSelectedCoord(center);
+    setMapRegion({
+      latitude: center.latitude,
+      longitude: center.longitude,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
+    });
+    setMapVisible(true);
+  };
 
-      const perm = await requestMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted') {
-        Alert.alert('Permisos', 'Se requieren permisos para acceder a tus fotos.');
-        return;
+  const onMapPress = (e) => {
+    const coord = e.nativeEvent.coordinate;
+    setSelectedCoord({ latitude: coord.latitude, longitude: coord.longitude });
+  };
+
+  const confirmMapSelection = async () => {
+    if (!selectedCoord) {
+      Alert.alert('Mapa', 'Selecciona un punto en el mapa.');
+      return;
+    }
+    try {
+      const { latitude, longitude } = selectedCoord;
+      setLocation({ latitude, longitude });
+
+      // Reverse geocode básico para rellenar address (si no viene de autocomplete)
+      const addressData = await Location.reverseGeocodeAsync({ latitude, longitude });
+      if (addressData && addressData.length > 0) {
+        const addr = addressData[0];
+        const formattedAddress = [addr.street, addr.streetNumber, addr.district, addr.city, addr.region]
+          .filter(Boolean)
+          .join(', ');
+        if (formattedAddress) setAddress((old) => old || formattedAddress);
       }
 
-      const result = await launchImageLibraryAsync({
-        mediaTypes: MediaTypeOptions.Images,
+      setMapVisible(false);
+      Alert.alert('Listo', 'Ubicación seleccionada.');
+    } catch (err) {
+      setMapVisible(false);
+      Alert.alert('Mapa', 'No se pudo procesar la ubicación.');
+    }
+  };
+
+  // -------- Autocomplete (Geoapify)  --------
+  const searchPlaces = async (q) => {
+    if (!GEOAPIFY_KEY) return;
+
+    try {
+      setSearchingPlaces(true);
+
+      const bias = location
+        ? `&bias=proximity:${location.longitude},${location.latitude}`
+        : '';
+
+      const url =
+        `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(q)}` +
+        `&limit=6&lang=es&filter=countrycode:sv${bias}&apiKey=${GEOAPIFY_KEY}`;
+
+      const res = await fetch(url);
+      const json = await res.json();
+      const feats = Array.isArray(json?.features) ? json.features : [];
+      setPlacesResults(feats);
+    } catch {
+      setPlacesResults([]);
+    } finally {
+      setSearchingPlaces(false);
+    }
+  };
+
+  const onChangePlacesQuery = (text) => {
+    setPlacesQuery(text);
+    if (searchTO.current) clearTimeout(searchTO.current);
+    if (!text || text.trim().length < 2) {
+      setPlacesResults([]);
+      return;
+    }
+    searchTO.current = setTimeout(() => searchPlaces(text.trim()), 350);
+  };
+
+  const pickFromPlaces = (feat) => {
+    // GeoJSON: geometry.coordinates = [lon, lat]
+    const coords = feat?.geometry?.coordinates || [];
+    const lon = Number(coords[0]);
+    const lat = Number(coords[1]);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      const coord = { latitude: lat, longitude: lon };
+      setSelectedCoord(coord);
+      setMapRegion((r) => ({ ...r, latitude: lat, longitude: lon }));
+      setLocation(coord);
+    }
+    const formatted = feat?.properties?.formatted || feat?.properties?.address_line1 || '';
+    if (formatted) setAddress(formatted);
+    setPlacesResults([]);
+    setPlacesQuery(
+      feat?.properties?.address_line1 ||
+      feat?.properties?.formatted ||
+      feat?.properties?.name ||
+      ''
+    );
+  };
+
+  // ---------- Imagen de perfil ----------
+  const requestMediaPermissions = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permisos', 'Se requieren permisos para acceder a tus fotos.');
+      return false;
+    }
+    return true;
+  };
+
+  const getPickerMediaTypes = () => {
+    return ImagePicker.MediaType
+      ? { mediaTypes: [ImagePicker.MediaType.Image] }
+      : { mediaTypes: ImagePicker.MediaTypeOptions.Images };
+  };
+
+  const pickImage = async () => {
+    try {
+      const ok = await requestMediaPermissions();
+      if (!ok) return;
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        ...getPickerMediaTypes(),
         allowsEditing: true,
         quality: 0.8,
         aspect: [1, 1],
@@ -179,15 +315,33 @@ export default function RegisterScreen({ navigation }) {
       if (!result.canceled && result.assets?.[0]?.uri) {
         setProfileUri(result.assets[0].uri);
       }
-    } catch (e) {
+    } catch {
       Alert.alert('Imagen', 'No fue posible abrir el selector de imágenes.');
     }
   };
 
+  const robustReadBlob = async (uri) => {
+    try {
+      const res = await fetch(uri);
+      const blob = await res.blob();
+      if (blob && blob.size) {
+        const type = blob.type || 'image/jpeg';
+        const ext = type.includes('png') ? 'png' : 'jpg';
+        return { blob, contentType: type, ext };
+      }
+    } catch (_) {}
+    const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    const lower = (uri || '').toLowerCase();
+    const isPng = lower.endsWith('.png') || lower.includes('image/png');
+    const mime = isPng ? 'image/png' : 'image/jpeg';
+    const dataUrl = `data:${mime};base64,${base64}`;
+    const res2 = await fetch(dataUrl);
+    const blob2 = await res2.blob();
+    return { blob: blob2, contentType: mime, ext: isPng ? 'png' : 'jpg' };
+  };
+
   const validate = () => {
     const newErrors = {};
-
-    // Comunes
     if (!name.trim()) newErrors.name = 'Nombre requerido';
     if (!email.trim()) newErrors.email = 'Email requerido';
     if (!phone.trim()) newErrors.phone = 'Teléfono requerido';
@@ -200,7 +354,6 @@ export default function RegisterScreen({ navigation }) {
     if (password && confirmPassword && password !== confirmPassword)
       newErrors.confirmPassword = 'Las contraseñas no coinciden';
 
-    // Solo doctor (requerimos Apellido y campos CSSP)
     if (role === 'doctor') {
       if (!lastName.trim()) newErrors.lastName = 'Apellido requerido';
 
@@ -230,27 +383,49 @@ export default function RegisterScreen({ navigation }) {
     try {
       setLoading(true);
 
-      // 1) Crear usuario en Auth
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const { user } = cred;
 
-      // Opcional: set displayName en profile (name + apellido si lo dieron)
+      // Subir foto opcional
+      let uploadedPhotoURL = null;
+      if (profileUri) {
+        try {
+          const bucket = app?.options?.storageBucket;
+          const storageInstance = bucket ? getStorage(app, `gs://${bucket}`) : getStorage(app);
+
+          const { blob, contentType, ext } = await robustReadBlob(profileUri);
+          const fileRef = ref(storageInstance, `avatars/${user.uid}.${ext}`);
+          const task = uploadBytesResumable(fileRef, blob, { contentType });
+
+          await new Promise((resolve, reject) => {
+            task.on('state_changed', () => {}, reject, resolve);
+          });
+
+          uploadedPhotoURL = await getDownloadURL(fileRef);
+        } catch (e) {
+          console.log('[Storage upload error]', e?.code, e?.message);
+        }
+      }
+
+      // Actualizar perfil Auth
       try {
         const display = lastName.trim() ? `${name.trim()} ${lastName.trim()}` : name.trim();
-        await updateProfile(user, { displayName: display });
-      } catch (_) {}
+        await updateProfile(user, { displayName: display, photoURL: uploadedPhotoURL || null });
+      } catch {}
 
-      // 2) Guardar datos en Firestore
+      // Guardar en Firestore
       const userDoc = {
         uid: user.uid,
-        name: name.trim(), 
+        name: name.trim(),
         lastName: lastName.trim() || null,
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
         address: address.trim(),
-        role: role, 
-        verified: role === 'doctor' ? false : true, // médicos requieren revisión
+        role,
+        verified: role === 'doctor' ? false : true,
         createdAt: serverTimestamp(),
+        photoURL: uploadedPhotoURL || null,
+        location: location ? { latitude: location.latitude, longitude: location.longitude } : null,
       };
 
       if (role === 'doctor') {
@@ -258,40 +433,21 @@ export default function RegisterScreen({ navigation }) {
         const finalProfession = useOtherProfession ? customProfession.trim() : profession.trim();
 
         userDoc.clinicAddress = clinicAddress.trim();
-
-        // Datos para validación manual (CSSP)
         userDoc.cssp = {
-          board: finalBoard,
-          profession: finalProfession,
-          boardNumber: boardNumber.trim(),
+          board: finalBoard || null,
+          profession: finalProfession || null,
+          boardNumber: boardNumber.trim() || null,
         };
-
         userDoc.reviewStatus = 'pending';
-      }
-
-      if (profileUri) userDoc.profileLocalUri = profileUri;
-
-      if (location) {
-        userDoc.location = {
-          latitude: location.latitude,
-          longitude: location.longitude,
-        };
       }
 
       await setDoc(doc(db, 'users', user.uid), userDoc);
 
-      // 3) Navegación
       if (role === 'doctor') {
-        Alert.alert(
-          'Registro enviado',
-          'Tu cuenta será revisada por el equipo administrativo antes de activarse completamente.'
-        );
-        navigation.replace('Login');
-      } else {
-        navigation.replace('Login');
+        Alert.alert('Registro enviado', 'Tu cuenta será revisada antes de activarse.');
       }
+      navigation.replace('Login');
     } catch (err) {
-      console.log('[Auth error]', err?.code, err?.message, err);
       const serverMessage =
         err?.customData?._tokenResponse?.error?.message || err?.message || 'UNKNOWN';
 
@@ -312,7 +468,6 @@ export default function RegisterScreen({ navigation }) {
   const renderError = (key) =>
     errors[key] ? <Text style={styles.errorText}>{errors[key]}</Text> : null;
 
-  // Listas filtradas para los buscadores (Junta y Profesión)
   const filteredBoards = [
     ...BOARD_OPTIONS.filter((s) =>
       s.toLowerCase().includes((boardQuery || '').toLowerCase())
@@ -369,6 +524,22 @@ export default function RegisterScreen({ navigation }) {
           )}
 
           <View style={styles.form}>
+            {/* Foto de perfil (opcional) */}
+            <View style={styles.photoRow}>
+              <TouchableOpacity
+                style={styles.photoBtn}
+                onPress={pickImage}
+                disabled={loading}
+              >
+                <Text style={styles.photoBtnText}>
+                  {profileUri ? 'Cambiar foto' : 'Subir foto (opcional)'}
+                </Text>
+              </TouchableOpacity>
+              {profileUri ? (
+                <Image source={{ uri: profileUri }} style={styles.avatarPreview} />
+              ) : null}
+            </View>
+
             {/* Nombre */}
             <TextInput
               style={styles.input}
@@ -379,7 +550,7 @@ export default function RegisterScreen({ navigation }) {
             />
             {renderError('name')}
 
-            {/* Apellido (nuevo) */}
+            {/* Apellido */}
             <TextInput
               style={styles.input}
               placeholder="Apellido"
@@ -412,7 +583,7 @@ export default function RegisterScreen({ navigation }) {
             />
             {renderError('phone')}
 
-            {/* Dirección */}
+            {/* Dirección + Ubicación */}
             <View>
               <TextInput
                 style={styles.input}
@@ -421,26 +592,45 @@ export default function RegisterScreen({ navigation }) {
                 onChangeText={setAddress}
                 editable={!loading}
               />
-              <TouchableOpacity
-                style={styles.locationBtn}
-                onPress={requestLocation}
-                disabled={loading || loadingLocation}
-              >
-                {loadingLocation ? (
-                  <ActivityIndicator size="small" color="#2196F3" />
-                ) : (
-                  <Text style={styles.locationBtnText}>
-                    📍 {location ? 'Ubicación obtenida' : 'Obtener mi ubicación'}
-                  </Text>
-                )}
-              </TouchableOpacity>
+
+              <View style={styles.locActionsRow}>
+                <TouchableOpacity
+                  style={[styles.locationBtn, { flex: 1 }]}
+                  onPress={requestLocation}
+                  disabled={loading || loadingLocation}
+                >
+                  {loadingLocation ? (
+                    <ActivityIndicator size="small" color="#2196F3" />
+                  ) : (
+                    <Text style={styles.locationBtnText}>
+                      📍 {location ? 'Usar mi ubicación' : 'Ubicación actual'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+
+                <View style={{ width: 8 }} />
+
+                <TouchableOpacity
+                  style={[styles.locationBtn, { flex: 1 }]}
+                  onPress={openMapPicker}
+                  disabled={loading}
+                >
+                  <Text style={styles.locationBtnText}>🗺️ Elegir en el mapa</Text>
+                </TouchableOpacity>
+              </View>
+
+              {location ? (
+                <Text style={styles.coordsHint}>
+                  Seleccionado: {location.latitude.toFixed(5)}, {location.longitude.toFixed(5)}
+                </Text>
+              ) : null}
+
               {renderError('address')}
             </View>
 
             {/* Campos SOLO doctor */}
             {role === 'doctor' && (
               <>
-                {/* Junta de Vigilancia */}
                 <View>
                   <Text style={styles.label}>Junta de Vigilancia</Text>
                   <TouchableOpacity
@@ -468,7 +658,6 @@ export default function RegisterScreen({ navigation }) {
                   </View>
                 )}
 
-                {/* Profesión */}
                 <View>
                   <Text style={styles.label}>Profesión</Text>
                   <TouchableOpacity
@@ -497,8 +686,7 @@ export default function RegisterScreen({ navigation }) {
                     {renderError('customProfession')}
                   </View>
                 )}
-
-                {/* Número de Junta */}
+                
                 <TextInput
                   style={styles.input}
                   placeholder="Número de Junta (CSSP)"
@@ -509,7 +697,6 @@ export default function RegisterScreen({ navigation }) {
                 />
                 {renderError('boardNumber')}
 
-                {/* Dirección del consultorio */}
                 <TextInput
                   style={styles.input}
                   placeholder="Dirección del consultorio"
@@ -518,26 +705,10 @@ export default function RegisterScreen({ navigation }) {
                   editable={!loading}
                 />
                 {renderError('clinicAddress')}
-
-                {/* (Opcional) Foto de perfil local */}
-                <View style={styles.photoRow}>
-                  <TouchableOpacity
-                    style={styles.photoBtn}
-                    onPress={pickImage}
-                    disabled={loading}
-                  >
-                    <Text style={styles.photoBtnText}>
-                      {profileUri ? 'Cambiar foto' : 'Subir foto (opcional)'}
-                    </Text>
-                  </TouchableOpacity>
-                  {profileUri ? (
-                    <Image source={{ uri: profileUri }} style={styles.avatarPreview} />
-                  ) : null}
-                </View>
               </>
             )}
 
-            {/* Passwords con mostrar/ocultar */}
+            {/* Passwords */}
             <View style={styles.inputWrapper}>
               <TextInput
                 style={[styles.input, styles.inputPassword]}
@@ -734,6 +905,106 @@ export default function RegisterScreen({ navigation }) {
           </View>
         </Modal>
       )}
+
+      {/* MODAL MAPA + AUTOCOMPLETE (Geoapify) */}
+      <Modal
+        visible={mapVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setMapVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { padding: 0, overflow: 'hidden' }]}>
+            {/* Autocomplete simple */}
+            <View style={styles.autocompleteWrapper}>
+              <TextInput
+                style={styles.placesInput}
+                placeholder="Buscar dirección o lugar"
+                value={placesQuery}
+                onChangeText={onChangePlacesQuery}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {searchingPlaces ? <ActivityIndicator style={{ marginTop: 6 }} /> : null}
+              {placesResults.length > 0 && (
+                <FlatList
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.placesList}
+                  data={placesResults}
+                  keyExtractor={(item, idx) => (item?.properties?.place_id || '') + idx}
+                  ItemSeparatorComponent={() => <View style={styles.placesSeparator} />}
+                  renderItem={({ item }) => {
+                    const title =
+                      item?.properties?.address_line1 ||
+                      item?.properties?.formatted ||
+                      item?.properties?.name ||
+                      'Resultado';
+                    const subtitle = item?.properties?.address_line2 || '';
+                    return (
+                      <TouchableOpacity
+                        style={styles.placesRow}
+                        onPress={() => pickFromPlaces(item)}
+                      >
+                        <Text style={{ fontSize: 15, fontWeight: '600' }}>{title}</Text>
+                        {!!subtitle && (
+                          <Text style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                            {subtitle}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              )}
+            </View>
+
+            {/* Info */}
+            <View style={styles.mapHeader}>
+              <Text style={styles.mapTitle}>Elige una ubicación</Text>
+              <Text style={styles.mapHint}>
+                Busca un lugar o toca el mapa para colocar el pin (puedes arrastrarlo).
+              </Text>
+            </View>
+
+            {/* Mapa */}
+            <View style={{ height: 320, width: '100%' }}>
+              <MapView
+                style={{ flex: 1 }}
+                provider={PROVIDER_GOOGLE}
+                initialRegion={mapRegion}
+                region={mapRegion}
+                onRegionChangeComplete={setMapRegion}
+                onPress={onMapPress}
+              >
+                {selectedCoord && (
+                  <Marker
+                    draggable
+                    coordinate={selectedCoord}
+                    onDragEnd={(e) => setSelectedCoord(e.nativeEvent.coordinate)}
+                  />
+                )}
+              </MapView>
+            </View>
+
+            {/* Acciones */}
+            <View style={styles.mapActions}>
+              <TouchableOpacity
+                style={[styles.locationBtn, { flex: 1, backgroundColor: '#E3F2FD', borderColor: '#90CAF9' }]}
+                onPress={() => setMapVisible(false)}
+              >
+                <Text style={[styles.locationBtnText, { color: '#1976D2' }]}>Cancelar</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.locationBtn, { flex: 1, backgroundColor: '#2196F3', borderColor: '#2196F3' }]}
+                onPress={confirmMapSelection}
+              >
+                <Text style={[styles.locationBtnText, { color: '#fff' }]}>Confirmar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -761,10 +1032,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#90CAF9',
   },
-  roleActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
-  },
+  roleActive: { backgroundColor: '#2196F3', borderColor: '#2196F3' },
   roleText: { color: '#1976D2', fontWeight: '600' },
   roleTextActive: { color: '#fff' },
 
@@ -779,35 +1047,8 @@ const styles = StyleSheet.create({
   noticeText: { color: '#8a6d3b', fontSize: 13 },
 
   form: { marginTop: 4, marginBottom: 20 },
-  input: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 15,
-    marginBottom: 8,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
 
-  inputWrapper: {
-    position: 'relative',
-    justifyContent: 'center',
-  },
-  inputPassword: {
-    paddingRight: 48, 
-  },
-  eyeButton: {
-    position: 'absolute',
-    right: 12,
-    height: 40,
-    width: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  label: { marginLeft: 4, marginBottom: 4, color: '#333', fontWeight: '600' },
-
+  // Foto
   photoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -825,6 +1066,47 @@ const styles = StyleSheet.create({
   photoBtnText: { color: '#333', fontWeight: '600' },
   avatarPreview: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, borderColor: '#ccc' },
 
+  input: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 15,
+    marginBottom: 8,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+
+  inputWrapper: { position: 'relative', justifyContent: 'center' },
+  inputPassword: { paddingRight: 48 },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    height: 40,
+    width: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  label: { marginLeft: 4, marginBottom: 4, color: '#333', fontWeight: '600' },
+
+  // Ubicación
+  locActionsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  locationBtn: {
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#90CAF9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 42,
+  },
+  locationBtnText: { color: '#1976D2', fontWeight: '600', fontSize: 14 },
+  coordsHint: { marginTop: 6, marginLeft: 4, color: '#666' },
+
+  // Botón principal
   button: {
     backgroundColor: '#2196F3',
     borderRadius: 8,
@@ -847,25 +1129,7 @@ const styles = StyleSheet.create({
 
   errorText: { color: '#D32F2F', marginBottom: 6, marginLeft: 4, fontSize: 12 },
 
-  locationBtn: {
-    backgroundColor: '#E3F2FD',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#90CAF9',
-    marginTop: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 42,
-  },
-  locationBtnText: {
-    color: '#1976D2',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-
-  // Modal
+  // Modal base
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
@@ -881,11 +1145,49 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 6,
   },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 8,
+
+  // Autocomplete (Geoapify)
+  autocompleteWrapper: {
+    position: 'relative',
+    width: '100%',
+    zIndex: 10,
+    paddingHorizontal: 12,
+    paddingTop: 12,
   },
+  placesInput: {
+    backgroundColor: '#fff',
+    height: 44,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  placesList: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    marginTop: 6,
+    maxHeight: 220,
+  },
+  placesRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  placesSeparator: {
+    height: 1,
+    backgroundColor: '#eee',
+  },
+
+  // Modal mapa
+  mapHeader: { paddingHorizontal: 16, paddingTop: 8 },
+  mapTitle: { fontSize: 18, fontWeight: '700' },
+  mapHint: { fontSize: 12, color: '#666', marginTop: 4, marginBottom: 8 },
+  mapActions: { flexDirection: 'row', padding: 12 },
+
+  // Modal listas
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
   optionItem: {
     backgroundColor: '#F9F9F9',
     borderWidth: 1,

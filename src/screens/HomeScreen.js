@@ -201,7 +201,7 @@ export default function HomeScreen({ navigation }) {
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={styles.headerTitle}>Panel de Doctor</Text>
+            <Text style={styles.headerTitle}>Panel principal</Text>
             {currentUserData?.name && (
               <Text style={styles.headerSubtitle}>Dr. {currentUserData.name}</Text>
             )}
