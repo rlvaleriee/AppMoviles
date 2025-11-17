@@ -6,16 +6,15 @@ import {
   TouchableOpacity,
   ScrollView,
   StyleSheet,
+  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import botService from '../services/botService';
 import { auth, db } from '../firebase';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 
 export default function ChatbotScreen({ navigation }) {
   const [messages, setMessages] = useState([
@@ -31,18 +30,47 @@ export default function ChatbotScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [userData, setUserData] = useState({
     symptoms: '',
-    specialty: '',
-    specialtyName: '',
+    specialtyKey: '',
+    specialtyName: '',   
+    specialtyLabel: '',  
     doctor: null,
     date: '',
     time: '',
   });
   const scrollViewRef = useRef(null);
   const currentUser = auth.currentUser;
+  const [patientLocation, setPatientLocation] = useState(null);
 
   useEffect(() => {
     scrollViewRef.current?.scrollToEnd({ animated: true });
   }, [messages]);
+
+  // Cargar ubicación del paciente desde Firestore
+  useEffect(() => {
+    const loadUserLocation = async () => {
+      try {
+        if (!currentUser?.uid) return;
+        const userRef = doc(db, 'users', currentUser.uid);
+        const snap = await getDoc(userRef);
+        if (!snap.exists()) return;
+
+        const data = snap.data();
+        if (
+          data?.location?.latitude != null &&
+          data?.location?.longitude != null
+        ) {
+          setPatientLocation({
+            latitude: data.location.latitude,
+            longitude: data.location.longitude,
+          });
+        }
+      } catch (e) {
+        console.log('Error cargando ubicación del paciente:', e?.message);
+      }
+    };
+
+    loadUserLocation();
+  }, [currentUser?.uid]);
 
   const addMessage = (text, type = 'bot', data = null) => {
     setMessages((prev) => [
@@ -63,16 +91,54 @@ export default function ChatbotScreen({ navigation }) {
     });
   };
 
-  // === Obtener médicos desde Firestore por especialidad (nombre legible) ===
-  const fetchDoctorsBySpecialty = async (specialtyName) => {
+  const clearChat = () => {
+    setMessages([
+      {
+        type: 'bot',
+        text:
+          '¡Hola! Soy tu asistente médico virtual. ¿En qué puedo ayudarte hoy? Puedes contarme tus síntomas o qué tipo de consulta necesitas.',
+        timestamp: new Date(),
+      },
+    ]);
+    setCurrentStep('initial');
+    setUserData({
+      symptoms: '',
+      specialtyKey: '',
+      specialtyName: '',
+      specialtyLabel: '',
+      doctor: null,
+      date: '',
+      time: '',
+    });
+    setInput('');
+  };
+
+  // Distancia en km entre dos coordenadas 
+  const getDistanceKm = (lat1, lon1, lat2, lon2) => {
+    const R = 6371;
+    const toRad = (v) => (v * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Obtener médicos por especialidad (label CONADEM) y ordenar por cercanía
+  const fetchDoctorsBySpecialty = async (specialtyLabel, userLocation) => {
     try {
       const base = collection(db, 'users');
       const q = query(base, where('role', '==', 'doctor'));
       const snap = await getDocs(q);
 
-      const term = (specialtyName || '').toLowerCase().trim();
+      const term = (specialtyLabel || '').toLowerCase().trim();
 
-      const items = snap.docs
+      let items = snap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
         .filter((u) => {
           const csspProf = u?.cssp?.profession || '';
@@ -99,13 +165,34 @@ export default function ChatbotScreen({ navigation }) {
               : []) || [];
           const rating = u?.ratingAvg ?? u?.rating ?? null;
 
+          let distanceKm = null;
+          if (
+            userLocation &&
+            u?.location?.latitude != null &&
+            u?.location?.longitude != null
+          ) {
+            distanceKm = getDistanceKm(
+              userLocation.latitude,
+              userLocation.longitude,
+              u.location.latitude,
+              u.location.longitude
+            );
+          }
+
           return {
-            id: u.uid || u.id, // usa este id en DoctorDetail
+            id: u.uid || u.id,
             name,
             specialties,
             rating,
+            distanceKm,
           };
         });
+
+      items = items.sort((a, b) => {
+        const da = a.distanceKm ?? Infinity;
+        const db = b.distanceKm ?? Infinity;
+        return da - db;
+      });
 
       return items.slice(0, 20);
     } catch (e) {
@@ -117,13 +204,13 @@ export default function ChatbotScreen({ navigation }) {
   const handleSendMessage = async () => {
     if (!input.trim() || loading) return;
 
-    const userInput = input;
+    const userInput = input.trim();
     addMessage(userInput, 'user');
     setInput('');
     setLoading(true);
 
     try {
-      // Respuestas rápidas
+      // 1) Respuestas rápidas
       const quickResponse = botService.getQuickResponse(userInput);
       if (quickResponse && currentStep === 'initial') {
         setTimeout(() => {
@@ -133,24 +220,47 @@ export default function ChatbotScreen({ navigation }) {
         return;
       }
 
+      // 2) Estado INITIAL: analizar síntomas
       if (currentStep === 'initial') {
-        // Analizar síntomas -> especialidad sugerida
-        const recommendation = botService.analyzeSymptoms(userInput);
-        setUserData((prev) => ({
-          ...prev,
-          symptoms: userInput,
-          specialty: recommendation.key,
-          specialtyName: recommendation.name,
-        }));
+        try {
+          const recommendation = await botService.analyzeSymptoms(userInput);
 
-        setTimeout(() => {
-          addMessage(
-            `Entiendo. Basándome en lo que me cuentas, te recomiendo consultar con ${recommendation.name}. ¿Te gustaría ver nuestros especialistas disponibles?`
-          );
-          setCurrentStep('show-doctors');
-          setLoading(false);
-        }, 800);
-      } else if (currentStep === 'show-doctors') {
+          setUserData((prev) => ({
+            ...prev,
+            symptoms: userInput,
+            specialtyKey: recommendation.key,
+            specialtyName: recommendation.name,           // amigable
+            specialtyLabel: recommendation.conademLabel,  // CONADEM / Firestore
+          }));
+
+          setTimeout(() => {
+            if (recommendation.hasDoctors) {
+              addMessage(
+                `Entiendo. Basándome en lo que me cuentas, te recomiendo consultar con ${recommendation.name}. ¿Te gustaría ver los profesionales disponibles?`
+              );
+              setCurrentStep('show-doctors');
+            } else {
+              addMessage(
+                `Basándome en tus síntomas, te recomendaría consultar con ${recommendation.name}, pero lamentablemente no tenemos especialistas en esta área registrados en este momento. ¿Podrías describir tus síntomas de otra manera o prefieres buscar otra especialidad?`
+              );
+              setCurrentStep('initial');
+            }
+            setLoading(false);
+          }, 800);
+        } catch (error) {
+          console.error('Error analizando síntomas:', error);
+          setTimeout(() => {
+            addMessage(
+              'Hubo un problema analizando tus síntomas. ¿Podrías describir tu consulta de otra manera?'
+            );
+            setLoading(false);
+          }, 800);
+        }
+        return;
+      }
+
+      // 3) Estado SHOW-DOCTORS
+      if (currentStep === 'show-doctors') {
         const lowerInput = userInput.toLowerCase();
 
         if (
@@ -158,21 +268,30 @@ export default function ChatbotScreen({ navigation }) {
           lowerInput.includes('si') ||
           lowerInput.includes('ok') ||
           lowerInput.includes('dale') ||
-          lowerInput.includes('claro')
+          lowerInput.includes('claro') ||
+          lowerInput.includes('ver') ||
+          lowerInput.includes('muestra')
         ) {
-          // Obtener doctores desde Firestore
-          const doctors = await fetchDoctorsBySpecialty(userData.specialtyName);
+          const doctors = await fetchDoctorsBySpecialty(
+            userData.specialtyLabel || userData.specialtyName,
+            patientLocation
+          );
 
           setTimeout(() => {
             if (doctors.length > 0) {
-              addMessage('Estos son nuestros especialistas disponibles:', 'bot', {
+              const hasLocation = patientLocation?.latitude && patientLocation?.longitude;
+              const message = hasLocation
+                ? 'Estos son nuestros especialistas disponibles, ordenados por cercanía a tu ubicación:'
+                : 'Estos son nuestros especialistas disponibles:';
+
+              addMessage(message, 'bot', {
                 type: 'doctors',
                 doctors,
               });
               setCurrentStep('listing');
             } else {
               addMessage(
-                'Lo siento, no hay especialistas disponibles en este momento. ¿Te gustaría probar con otra especialidad?'
+                `Lo siento, no encontré especialistas en ${userData.specialtyName} registrados en este momento. ¿Te gustaría buscar otra especialidad?`
               );
               setCurrentStep('change-specialty');
             }
@@ -181,53 +300,118 @@ export default function ChatbotScreen({ navigation }) {
         } else {
           setTimeout(() => {
             addMessage(
-              '¿Qué especialidad prefieres? Puedo mostrarte: Medicina General, Cardiología, Dermatología, Pediatría, Traumatología, o Ginecología.'
+              'Claro, dime qué especialidad necesitas o descríbeme tus síntomas para recomendarte el profesional adecuado.'
             );
             setCurrentStep('change-specialty');
             setLoading(false);
           }, 800);
         }
-      } else if (currentStep === 'change-specialty') {
-        const recommendation = botService.analyzeSymptoms(userInput);
-        setUserData((prev) => ({
-          ...prev,
-          specialty: recommendation.key,
-          specialtyName: recommendation.name,
-        }));
-
-        const doctors = await fetchDoctorsBySpecialty(recommendation.name);
-
-        setTimeout(() => {
-          if (doctors.length > 0) {
-            addMessage(
-              `Perfecto, aquí están nuestros especialistas en ${recommendation.name}:`,
-              'bot',
-              { type: 'doctors', doctors }
-            );
-            setCurrentStep('listing');
-          } else {
-            addMessage(
-              `No encontré especialistas en ${recommendation.name} por ahora. ¿Quieres intentar con otra especialidad?`
-            );
-            setCurrentStep('change-specialty');
-          }
-          setLoading(false);
-        }, 800);
-      } else {
-        // Cualquier otro estado: respuesta por defecto
-        setTimeout(() => {
-          addMessage('Cuéntame qué especialidad necesitas y te muestro los doctores disponibles.');
-          setLoading(false);
-        }, 600);
+        return;
       }
+
+      // 4) Estado CHANGE-SPECIALTY
+      if (currentStep === 'change-specialty') {
+        try {
+          const recommendation = await botService.analyzeSymptoms(userInput);
+
+          setUserData((prev) => ({
+            ...prev,
+            specialtyKey: recommendation.key,
+            specialtyName: recommendation.name,
+            specialtyLabel: recommendation.conademLabel,
+          }));
+
+          const doctors = await fetchDoctorsBySpecialty(
+            recommendation.conademLabel,
+            patientLocation
+          );
+
+          setTimeout(() => {
+            if (doctors.length > 0) {
+              const hasLocation = patientLocation?.latitude && patientLocation?.longitude;
+              const message = hasLocation
+                ? `Perfecto, aquí están nuestros especialistas en ${recommendation.name}, ordenados por cercanía a tu ubicación:`
+                : `Perfecto, aquí están nuestros especialistas en ${recommendation.name}:`;
+
+              addMessage(message, 'bot', { type: 'doctors', doctors });
+              setCurrentStep('listing');
+            } else {
+              addMessage(
+                `No encontré especialistas en ${recommendation.name} registrados en este momento. ¿Quieres intentar con otra especialidad?`
+              );
+            }
+            setLoading(false);
+          }, 800);
+        } catch (error) {
+          console.error('Error cambiando especialidad:', error);
+          setTimeout(() => {
+            addMessage(
+              'No pude procesar tu solicitud. ¿Podrías ser más específico sobre qué especialidad necesitas?'
+            );
+            setLoading(false);
+          }, 800);
+        }
+        return;
+      }
+
+      // 5) Estado LISTING (permite cambiar especialidad de nuevo)
+      if (currentStep === 'listing') {
+        try {
+          const recommendation = await botService.analyzeSymptoms(userInput);
+
+          setUserData((prev) => ({
+            ...prev,
+            specialtyKey: recommendation.key,
+            specialtyName: recommendation.name,
+            specialtyLabel: recommendation.conademLabel,
+          }));
+
+          const doctors = await fetchDoctorsBySpecialty(
+            recommendation.conademLabel,
+            patientLocation
+          );
+
+          setTimeout(() => {
+            if (doctors.length > 0) {
+              const hasLocation = patientLocation?.latitude && patientLocation?.longitude;
+              const message = hasLocation
+                ? `Entendido, aquí están los especialistas en ${recommendation.name}, ordenados por cercanía a tu ubicación:`
+                : `Entendido, aquí están los especialistas en ${recommendation.name}:`;
+
+              addMessage(message, 'bot', { type: 'doctors', doctors });
+            } else {
+              addMessage(
+                `No encontré especialistas en ${recommendation.name} registrados en este momento. ¿Quieres ver otra especialidad?`
+              );
+              setCurrentStep('change-specialty');
+            }
+            setLoading(false);
+          }, 800);
+        } catch (error) {
+          setTimeout(() => {
+            addMessage('¿Necesitas ver otra especialidad? Descríbeme lo que buscas.');
+            setLoading(false);
+          }, 800);
+        }
+        return;
+      }
+
+      // Fallback
+      setTimeout(() => {
+        addMessage('¿En qué más puedo ayudarte? Cuéntame qué especialidad necesitas.');
+        setCurrentStep('initial');
+        setLoading(false);
+      }, 600);
     } catch (error) {
-      console.error('Error:', error);
-      addMessage('Lo siento, hubo un error. Por favor intenta de nuevo.');
-      setLoading(false);
+      console.error('Error general:', error);
+      setTimeout(() => {
+        addMessage('Lo siento, hubo un error. Por favor intenta de nuevo.');
+        setLoading(false);
+      }, 800);
     }
   };
 
-  // ====== LISTADO DE DOCTORES (tap -> abre DoctorDetail dentro de HomeStack) ======
+  // ====== LISTADO DE DOCTORES ======
   const renderDoctors = (doctors) => (
     <View style={styles.optionsContainer}>
       {doctors.map((doctor) => (
@@ -243,10 +427,18 @@ export default function ChatbotScreen({ navigation }) {
           <View style={styles.doctorInfo}>
             <Text style={styles.doctorName}>{doctor.name}</Text>
             <Text style={styles.doctorExperience}>
-              {(doctor.specialties && doctor.specialties.join(' · ')) || 'Especialidad no especificada'}
+              {(doctor.specialties && doctor.specialties.join(' · ')) ||
+                'Especialidad no especificada'}
             </Text>
+            {doctor.distanceKm != null && (
+              <Text style={styles.doctorDistance}>
+                {doctor.distanceKm.toFixed(1)} km de distancia
+              </Text>
+            )}
             {doctor.rating != null && (
-              <Text style={styles.doctorRating}>⭐ {Number(doctor.rating).toFixed(1)}</Text>
+              <Text style={styles.doctorRating}>
+                ⭐ {Number(doctor.rating).toFixed(1)}
+              </Text>
             )}
           </View>
           <Ionicons name="chevron-forward" size={20} color="#3B82F6" />
@@ -255,13 +447,17 @@ export default function ChatbotScreen({ navigation }) {
     </View>
   );
 
-  // (Placeholders conservados)
   const renderCalendar = () => {
     const dates = botService.getAvailableDates(7);
     return (
       <View style={styles.calendarContainer}>
         {dates.map((dateInfo, idx) => (
-          <TouchableOpacity key={idx} style={styles.dateButton} onPress={() => {}} disabled={loading}>
+          <TouchableOpacity
+            key={idx}
+            style={styles.dateButton}
+            onPress={() => {}}
+            disabled={loading}
+          >
             <Ionicons name="calendar-outline" size={20} color="#3B82F6" />
             <Text style={styles.dateDay}>{dateInfo.displayDate.split(',')[0]}</Text>
             <Text style={styles.dateNumber}>{dateInfo.displayDate.split(',')[1]}</Text>
@@ -274,7 +470,12 @@ export default function ChatbotScreen({ navigation }) {
   const renderTimes = (times) => (
     <View style={styles.timesContainer}>
       {times.map((time, idx) => (
-        <TouchableOpacity key={idx} style={styles.timeButton} onPress={() => {}} disabled={loading}>
+        <TouchableOpacity
+          key={idx}
+          style={styles.timeButton}
+          onPress={() => {}}
+          disabled={loading}
+        >
           <Ionicons name="time-outline" size={20} color="#3B82F6" />
           <Text style={styles.timeText}>{time}</Text>
         </TouchableOpacity>
@@ -370,10 +571,17 @@ export default function ChatbotScreen({ navigation }) {
           <View style={styles.headerIcon}>
             <Ionicons name="chatbubbles" size={24} color="#fff" />
           </View>
-          <View>
+          <View style={styles.headerContent}>
             <Text style={styles.headerTitle}>Asistente Médico</Text>
             <Text style={styles.headerSubtitle}>Agenda tu cita fácilmente</Text>
           </View>
+          <TouchableOpacity
+            style={styles.clearButton}
+            onPress={clearChat}
+            disabled={loading}
+          >
+            <Ionicons name="refresh" size={24} color="#fff" />
+          </TouchableOpacity>
         </View>
 
         {/* Messages */}
@@ -387,13 +595,17 @@ export default function ChatbotScreen({ navigation }) {
               key={idx}
               style={[
                 styles.messageWrapper,
-                message.type === 'user' ? styles.userMessageWrapper : styles.botMessageWrapper,
+                message.type === 'user'
+                  ? styles.userMessageWrapper
+                  : styles.botMessageWrapper,
               ]}
             >
               <View
                 style={[
                   styles.messageBubble,
-                  message.type === 'user' ? styles.userMessage : styles.botMessage,
+                  message.type === 'user'
+                    ? styles.userMessage
+                    : styles.botMessage,
                 ]}
               >
                 {renderMessageContent(message)}
@@ -464,6 +676,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#64B5F6',
   },
+  headerContent: {
+    flex: 1,
+  },
   headerTitle: {
     fontSize: 22,
     fontWeight: 'bold',
@@ -472,6 +687,15 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: '#E3F2FD',
+  },
+  clearButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#1976D2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
   },
 
   // ===== Mensajes =====
@@ -557,6 +781,7 @@ const styles = StyleSheet.create({
   doctorInfo: { flex: 1 },
   doctorName: { fontSize: 15, fontWeight: '600', color: '#1F2937' },
   doctorExperience: { fontSize: 13, color: '#666', marginTop: 2 },
+  doctorDistance: { fontSize: 12, color: '#4B5563', marginTop: 2 },
   doctorRating: { fontSize: 13, color: '#FBC02D', marginTop: 2 },
 
   // ===== Fechas/horarios (placeholder) =====
