@@ -14,7 +14,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { getNearbyDoctors } from '../services/doctorLocationService';
 import { listenAppointmentsByUser } from '../services/appointmentService';
-import { updateAppointmentStatus } from '../services/firestore';
+import { updateAppointmentStatus, getUserById } from '../services/firestore';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -84,38 +84,54 @@ export default function HomeScreen({ navigation }) {
   };
 
   const loadDoctorStats = () => {
-    if (!currentUserData?.uid) {
-      setLoading(false);
-      setDoctorStats({
-        pending: 0,
-        todayAppts: 0,
-        total: 0,
-        confirmed: 0,
-        completed: 0,
-      });
-      return;
-    }
-    setLoading(true);
-    const unsubscribe = listenAppointmentsByUser({
-      uid: currentUserData.uid,
-      role: 'doctor',
-      cb: (appointments) => {
-        const now = new Date();
+  if (!currentUserData?.uid) {
+    setLoading(false);
+    setDoctorStats({
+      pending: 0,
+      todayAppts: 0,
+      total: 0,
+      confirmed: 0,
+      completed: 0,
+    });
+    return;
+  }
+  setLoading(true);
+
+  const unsubscribe = listenAppointmentsByUser({
+    uid: currentUserData.uid,
+    role: 'doctor',
+    cb: async (appointments) => {
+      try {
+        // 🔹 Igual que en AppointmentsScreen: traer datos del paciente
+        const enrichedAppointments = await Promise.all(
+          appointments.map(async (a) => {
+            // si ya tiene patientName, lo dejamos
+            if (a.patientName) return a;
+
+            if (!a.patientId) return a;
+
+            try {
+              const patient = await getUserById(a.patientId);
+              const fullName = `${patient?.name || ''} ${patient?.lastName || ''}`.trim();
+              return { ...a, patientName: fullName || 'Paciente' };
+            } catch (e) {
+              console.log('Error cargando paciente', e);
+              return a;
+            }
+          })
+        );
+
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today.getTime() + 86400000);
 
-        const pending = appointments.filter((a) => a.status === 'requested').length;
-        const confirmed = appointments.filter((a) => a.status === 'confirmed').length;
-        const completed = appointments.filter((a) => a.status === 'completed').length;
+        const pending = enrichedAppointments.filter((a) => a.status === 'requested').length;
+        const confirmed = enrichedAppointments.filter((a) => a.status === 'confirmed').length;
+        const completed = enrichedAppointments.filter((a) => a.status === 'completed').length;
+        const total = enrichedAppointments.length;
 
-        const todayAppts = appointments.filter((a) => {
-          const apptDate = a.slotStart?.toDate?.() || a.slotStart;
-          return apptDate && apptDate >= today && apptDate < tomorrow;
-        }).length;
-
-        // Citas de hoy (todas las de hoy, ordenadas por hora)
-        const todayCitas = appointments
+        // Citas de hoy
+        const todayCitas = enrichedAppointments
           .filter((a) => {
             const apptDate = a.slotStart?.toDate?.() || a.slotStart;
             return apptDate && apptDate >= today && apptDate < tomorrow;
@@ -126,8 +142,8 @@ export default function HomeScreen({ navigation }) {
             return dateA - dateB;
           });
 
-        // Próximas citas (futuras después de hoy, confirmadas)
-        const upcoming = appointments
+        // Próximas citas
+        const upcoming = enrichedAppointments
           .filter((a) => {
             const apptDate = a.slotStart?.toDate?.() || a.slotStart;
             return a.status === 'confirmed' && apptDate && apptDate >= tomorrow;
@@ -139,8 +155,8 @@ export default function HomeScreen({ navigation }) {
           })
           .slice(0, 5);
 
-        // Historial reciente (últimas 5 completadas)
-        const history = appointments
+        // Historial reciente
+        const history = enrichedAppointments
           .filter((a) => a.status === 'completed')
           .sort((a, b) => {
             const dateA = a.slotStart?.toDate?.() || a.slotStart;
@@ -149,10 +165,8 @@ export default function HomeScreen({ navigation }) {
           })
           .slice(0, 5);
 
-        const total = appointments.length;
-
-        // Todas las citas completadas (para el modal de historial)
-        const allCompleted = appointments
+        // Todas completadas para el modal
+        const allCompleted = enrichedAppointments
           .filter((a) => a.status === 'completed')
           .sort((a, b) => {
             const dateA = a.slotStart?.toDate?.() || a.slotStart;
@@ -160,16 +174,20 @@ export default function HomeScreen({ navigation }) {
             return dateB - dateA;
           });
 
-        setDoctorStats({ pending, todayAppts, total, confirmed, completed });
+        setDoctorStats({ pending, todayAppts: todayCitas.length, total, confirmed, completed });
         setTodayAppointments(todayCitas);
         setUpcomingAppointments(upcoming);
         setRecentHistory(history);
         setAllCompletedAppointments(allCompleted);
+      } finally {
         setLoading(false);
-      },
-    });
-    return unsubscribe;
-  };
+      }
+    },
+  });
+
+  return unsubscribe;
+};
+
 
   const onRefresh = async () => {
     setRefreshing(true);
