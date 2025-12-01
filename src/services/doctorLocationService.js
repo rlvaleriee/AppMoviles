@@ -140,7 +140,10 @@ export async function getNearbyDoctors(...args) {
     });
 
     items.sort((a, b) => a.distanceKm - b.distanceKm);
-    return items.slice(0, limit);
+    const slicedItems = items.slice(0, limit);
+
+    // Las fotos ya vienen de Cloudinary en el campo photoURL desde Firestore
+    return slicedItems;
   } catch (err) {
     if (String(err?.code) !== 'failed-precondition') {
       throw err;
@@ -172,7 +175,10 @@ export async function getNearbyDoctors(...args) {
     });
 
     items.sort((a, b) => a.distanceKm - b.distanceKm);
-    return items.slice(0, limit);
+    const slicedItems = items.slice(0, limit);
+
+    // Las fotos ya vienen de Cloudinary en el campo photoURL desde Firestore
+    return slicedItems;
   }
 }
 
@@ -275,7 +281,10 @@ export async function getNearbyDoctorsByProfession(...args) {
   });
 
   items.sort((a, b) => a.distanceKm - b.distanceKm);
-  return items.slice(0, limit);
+  const slicedItems = items.slice(0, limit);
+
+  // Las fotos ya vienen de Cloudinary en el campo photoURL desde Firestore
+  return slicedItems;
 }
 
 export const getNearbyDoctorsBySpecialty = getNearbyDoctorsByProfession;

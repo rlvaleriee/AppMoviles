@@ -1,343 +1,121 @@
-import dayjs from 'dayjs';
-import 'dayjs/locale/es';
 import { db } from '../firebase';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  getDoc,
-  addDoc,
-  Timestamp,
-} from 'firebase/firestore';
+import { collection, addDoc, Timestamp } from 'firebase/firestore';
+import openaiService from './openaiService';
 
-dayjs.locale('es');
-
-// ========== UTILIDADES DE HORARIO ==========
-const toMinutes = (hhmm) => {
-  if (typeof hhmm !== 'string') return NaN;
-  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return NaN;
-  const h = parseInt(m[1], 10);
-  const mi = parseInt(m[2], 10);
-  if (h < 0 || h > 23 || mi < 0 || mi > 59) return NaN;
-  return h * 60 + mi;
+// ========== MAPEO DE ESPECIALIDADES ==========
+const SPECIALTY_MAPPING = {
+  'medicina general': ['en medicina'],
+  'nutrición': ['nutrici', 'dietética', 'dietetica'],
+  'cardiología': ['cardio'],
+  'dermatología': ['dermat'],
+  'pediatría': ['pediatr'],
+  'ginecología': ['gineco'],
+  'gastroenterología': ['gastro'],
+  'traumatología': ['trauma', 'ortopedia'],
+  'ortopedia': ['trauma', 'ortopedia'],
+  'fisioterapia': ['fisioterap', 'física', 'fisica', 'terapia ocupacional', 'rehabilitacion'],
+  'quiropractico': ['quiropractico', 'quiropractica'],
+  'psicología': ['psicol'],
+  'odontología': ['dental', 'odont', 'cirugía dental', 'cirugia dental'],
+  'oftalmología': ['optometr', 'oftalmol', 'vision'],
+  'optometría': ['optometr', 'oftalmol', 'vision'],
+  'urología': ['urolog'],
+  'enfermería': ['enferm'],
+  'veterinaria': ['veterinari'],
+  'farmacia': ['farmaci', 'química', 'quimica'],
+  'radiología': ['radiolog', 'imágenes', 'imagenes'],
+  'laboratorio': ['laboratorio', 'bioanalisis', 'laboratorio clinico'],
 };
 
-const two = (n) => String(n).padStart(2, '0');
-
-const fromMinutes = (m) => {
-  m = Math.max(0, Math.min(24 * 60, m));
-  const h = Math.floor(m / 60);
-  const mi = m % 60;
-  return `${two(h)}:${two(mi)}`;
-};
-
-const sliceIntervalToSlots = (start, end, durationMin = 30) => {
-  const s = toMinutes(start);
-  const e = toMinutes(end);
-  const d = Math.max(5, durationMin | 0);
-  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return [];
-  const result = [];
-  let t = s;
-  while (t + d <= e) {
-    result.push(fromMinutes(t));
-    t += d;
-  }
-  return result;
-};
-
-const deriveSlotsFromRanges = (ranges = [], duration = 30) => {
-  const all = [];
-  for (const r of ranges) {
-    if (r?.start && r?.end) all.push(...sliceIntervalToSlots(r.start, r.end, duration));
-  }
-  return Array.from(new Set(all)).sort((a, b) => toMinutes(a) - toMinutes(b));
-};
-
-// ========== CACHÉ DE ESPECIALIDADES ==========
-let CACHED_SPECIALTIES = [];
-let LAST_FETCH = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
-
-// ========== CARGAR ESPECIALIDADES DISPONIBLES ==========
-async function loadAvailableSpecialties() {
-  const now = Date.now();
-
-  if (CACHED_SPECIALTIES.length > 0 && now - LAST_FETCH < CACHE_DURATION) {
-    return CACHED_SPECIALTIES;
-  }
-
+// ========== ANÁLISIS DE SÍNTOMAS CON OPENAI ==========
+async function analyzeSymptoms(text, conversationHistory = []) {
   try {
-    const q = query(
-      collection(db, 'users'),
-      where('role', '==', 'doctor')
-    );
-    const snap = await getDocs(q);
+    // Llamar a OpenAI
+    const aiAnalysis = await openaiService.analyzeMessageWithAI(text, conversationHistory);
 
-    const specialtiesSet = new Set();
+    // Si OpenAI no tiene una recomendación clara, devolver sin especialidad
+    if (!aiAnalysis.hasRecommendation || aiAnalysis.needsMoreInfo) {
+      return {
+        key: 'needs_more_info',
+        name: null,
+        conademLabel: null,
+        hasDoctors: false,
+        aiResponse: aiAnalysis.response,
+        needsMoreInfo: true,
+        urgencyLevel: aiAnalysis.urgencyLevel,
+      };
+    }
 
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
+    // OpenAI tiene una recomendación, buscar keywords para esta especialidad
+    const aiSpecialty = (aiAnalysis.specialty || '').toLowerCase();
+    let matchedKeywords = SPECIALTY_MAPPING[aiSpecialty] || [];
 
-      if (data?.cssp?.profession) {
-        specialtiesSet.add(data.cssp.profession);
-      }
-      if (data?.specialty) {
-        specialtiesSet.add(data.specialty);
-      }
-      if (Array.isArray(data?.specialties)) {
-        data.specialties.forEach((s) => {
-          if (s && s.trim()) specialtiesSet.add(s.trim());
-        });
-      }
-    });
-
-    CACHED_SPECIALTIES = Array.from(specialtiesSet).filter(Boolean);
-    LAST_FETCH = now;
-    return CACHED_SPECIALTIES;
-  } catch (error) {
-    console.error('❌ Error cargando especialidades:', error);
-    return [];
-  }
-}
-
-// ========== VERIFICAR SI HAY DOCTORES CON UNA ESPECIALIDAD ==========
-async function checkDoctorsAvailability(specialtyLabel) {
-  try {
-    const base = collection(db, 'users');
-    const q = query(base, where('role', '==', 'doctor'));
-    const snap = await getDocs(q);
-
-    const term = (specialtyLabel || '').toLowerCase().trim();
-
-    const doctors = snap.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((u) => {
-        const csspProf = u?.cssp?.profession || '';
-        const specialty = u?.specialty || '';
-        const arr = Array.isArray(u?.specialties) ? u.specialties : [];
-
-        const hitCSSP = (csspProf || '').toLowerCase().includes(term);
-        const hitSpecialty = (specialty || '').toLowerCase().includes(term);
-        const hitArr = arr.some((s) => (s || '').toLowerCase().includes(term));
-        return hitCSSP || hitSpecialty || hitArr;
-      });
-
-    return doctors.length > 0;
-  } catch (error) {
-    console.error('Error verificando disponibilidad de doctores:', error);
-    return false;
-  }
-}
-
-// Mapeo de patrones -> keywords 
-const SYMPTOM_TO_KEYWORDS = {
-  'bajar de peso|bajada de peso|perder peso|perdida de peso|adelgazar|obesidad|sobrepeso|dieta|nutrici|alimentaci|desnutri|peso ideal|engordar|anorexia|bulimia':
-    ['nutrici', 'dietética', 'dietetica', 'nutricion'],
-  'vomito|vómito|nausea|náusea|diarrea|estreñi|dolor de estomago|dolor estomacal|gastritis|reflujo|colon|digestivo':
-    ['gastro', 'medicina', 'medico', 'doctor', 'general'],
-  'fiebre|calentura|tos|grip|gripe|resfri|malestar general|cefalea|dolor de cabeza|mareo':
-    ['medicina', 'medico', 'doctor', 'general'],
-  'dolor de pecho|pecho|corazón|corazon|taquicardia|palpitaciones|cardio|presión alta|presion alta|hipertensi|tension alta':
-    ['cardio'],
-  'dient|muela|boca|caries|encía|encia|ortodon|dental|dolor de muela|sangrado de encías':
-    ['dental', 'odont', 'cirugía dental', 'cirugia dental'],
-  'fisioterap|rehabilit|terapia física|terapia fisica|dolor de espalda|espalda|lumbago|lumbar|esguince|contractura|cuello|cervical':
-    ['fisioterap', 'física', 'fisica', 'terapia ocupacional', 'rehabilitacion'],
-  'fractur|hueso roto|caída|caida|trauma|golpe|lesion deportiva|rodilla|tobillo|muñeca|luxacion':
-    ['trauma', 'ortopedia'],
-  'embaraz|embarazo|gesta|gestacion|materno|lactanc|lactancia|posparto|prenatal|bebe|bebé|recien nacido|parto':
-    ['materno', 'infantil', 'maternidad', 'obstetric'],
-  'ojo|ojos|visión|vision|ver borroso|miop|miopia|astigmat|astigmatismo|vista|lentes|conjuntivitis|orzuelo':
-    ['optometr', 'oftalmol', 'vision'],
-  'ansied|ansiedad|depresi|depresion|psicol|estrés|estres|pánico|panico|duelo|salud mental|tristeza|insomnio|angustia':
-    ['psicol'],
-  'farmaci|medicamento|pastilla|receta|dosis|interaccion|efectos secundarios':
-    ['farmaci', 'química', 'quimica'],
-  'mascota|perro|gato|veterinari|animal|ave|reptil|caballo':
-    ['veterinari'],
-  'piel|acné|acne|dermat|lunar|eczema|psoriasis|alergia cutanea|manchas|ronchas|sarpullido|comezon':
-    ['dermat'],
-  'niño|niña|pediatr|bebe|bebé|infante|vacuna infantil|control de niño sano':
-    ['pediatr'],
-  'mujer|gineco|menstruaci|menstruacion|menopausia|anticonceptivo|papanicolau|ovario|utero|matriz':
-    ['gineco'],
-  'enferm|curacion|curación|inyeccion|inyección|sutura|control de signos|presion arterial|toma de muestra':
-    ['enferm'],
-  'orina|orinar|riñon|riñones|prostata|próstata|vias urinarias|infeccion urinaria':
-    ['urolog'],
-  'radiolog|rayos x|tomograf|tomografia|resonancia|ecografia|ultrasonido|imagen medica':
-    ['radiolog', 'imágenes', 'imagenes'],
-  'laboratorio|examen de sangre|analisis clinico|bioanalisis|prueba de laboratorio':
-    ['laboratorio', 'bioanalisis', 'laboratorio clinico'],
-};
-
-// Fallbacks de nombre amigable por patrón (para cuando NO hay médicos registrados)
-const PATTERN_FRIENDLY_FALLBACK = {
-  'bajar de peso|bajada de peso|perder peso|perdida de peso|adelgazar|obesidad|sobrepeso|dieta|nutrici|alimentaci|desnutri|peso ideal|engordar|anorexia|bulimia':
-    'un nutricionista',
-  'dolor de pecho|pecho|corazón|corazon|taquicardia|palpitaciones|cardio|presión alta|presion alta|hipertensi|tension alta':
-    'un cardiólogo',
-  'piel|acné|acne|dermat|lunar|eczema|psoriasis|alergia cutanea|manchas|ronchas|sarpullido|comezon':
-    'un dermatólogo',
-  'niño|niña|pediatr|bebe|bebé|infante|vacuna infantil|control de niño sano':
-    'un pediatra',
-  'mujer|gineco|menstruaci|menstruacion|menopausia|anticonceptivo|papanicolau|ovario|utero|matriz':
-    'un ginecólogo',
-  
-};
-
-// ========== ANÁLISIS DE SÍNTOMAS (SIN FALLBACK A MEDICINA GENERAL) ==========
-async function analyzeSymptoms(text) {
-  const availableSpecs = await loadAvailableSpecialties();
-  console.log('📋 Especialidades disponibles:', availableSpecs);
-
-  const textLower = (text || '').toLowerCase();
-  console.log('🔍 Analizando texto:', textLower);
-
-  if (availableSpecs.length === 0) {
-    return {
-      key: 'sin_especialidades',
-      name: 'la especialidad adecuada',
-      conademLabel: null,
-      hasDoctors: false,
-    };
-  }
-
-  // 1) PATRONES DE SÍNTOMAS -> ESPECIALIDADES REGISTRADAS
-  for (const [pattern, keywords] of Object.entries(SYMPTOM_TO_KEYWORDS)) {
-    const regex = new RegExp(pattern);
-
-    if (regex.test(textLower)) {
-      console.log('✅ Patrón coincidente:', pattern);
-      console.log('🔑 Keywords a buscar:', keywords);
-
-      let matchedSpec = null;
-
-      for (const spec of availableSpecs) {
-        const specLower = spec.toLowerCase();
-        console.log('   Comparando', `"${spec}"`, 'con keywords...');
-        if (keywords.some((kw) => specLower.includes(kw))) {
-          matchedSpec = spec;
+    // Si no hay mapeo directo, intentar buscar por partes del nombre
+    if (matchedKeywords.length === 0) {
+      for (const [key, keywords] of Object.entries(SPECIALTY_MAPPING)) {
+        if (aiSpecialty.includes(key) || key.includes(aiSpecialty)) {
+          matchedKeywords = keywords;
           break;
         }
       }
-
-      if (matchedSpec) {
-        console.log('✅ Especialidad registrada encontrada:', matchedSpec);
-        return {
-          key: normalizeKey(matchedSpec),
-          name: formatSpecialtyName(matchedSpec),
-          conademLabel: matchedSpec,
-          hasDoctors: true,
-        };
-      }
-
-      // Patrón detectado pero NO hay esa especialidad en la BD
-      console.log(
-        '⚠️ No se encontró especialidad registrada para este patrón (no se hará fallback a Medicina General).'
-      );
-
-      const friendlyFallback =
-        PATTERN_FRIENDLY_FALLBACK[pattern] || 'un especialista adecuado';
-
-      return {
-        key: normalizeKey(keywords[0] || 'sin_especialidad'),
-        name: friendlyFallback,      
-        conademLabel: null,          
-        hasDoctors: false,           
-      };
     }
-  }
 
-  // 2) SIN PATRÓN: intentar matchear el texto directamente con alguna especialidad registrada
-  const fuzzyMatch = availableSpecs.find((spec) => {
-    const specLower = spec.toLowerCase();
-    return (
-      specLower.includes(textLower) ||      
-      textLower.includes(specLower)         
-    );
-  });
+    // Si aún no hay keywords, usar medicina general como alternativa
+    const hasDoctorsForSpecialty = matchedKeywords.length > 0;
+    const fallbackToGeneral = !hasDoctorsForSpecialty;
 
-  if (fuzzyMatch) {
-    console.log('✅ Coincidencia directa con especialidad registrada:', fuzzyMatch);
+    // Keywords finales: la especialidad solicitada o medicina general como fallback
+    const finalKeywords = hasDoctorsForSpecialty
+      ? matchedKeywords
+      : SPECIALTY_MAPPING['medicina general'];
+
     return {
-      key: normalizeKey(fuzzyMatch),
-      name: formatSpecialtyName(fuzzyMatch),
-      conademLabel: fuzzyMatch,
-      hasDoctors: true,
+      key: normalizeKey(aiSpecialty),
+      name: formatSpecialtyName(aiSpecialty),
+      conademLabel: aiSpecialty,
+      searchKeywords: finalKeywords,
+      hasDoctors: true, // Siempre true porque tenemos fallback a medicina general
+      originalSpecialtyHasDoctors: hasDoctorsForSpecialty,
+      fallbackToGeneral,
+      aiResponse: aiAnalysis.response,
+      urgencyLevel: aiAnalysis.urgencyLevel,
+      symptomsSummary: aiAnalysis.symptomsSummary,
+    };
+
+  } catch (error) {
+    console.error('❌ Error en análisis:', error);
+    return {
+      key: 'error',
+      name: null,
+      conademLabel: null,
+      hasDoctors: false,
+      needsMoreInfo: true,
+      aiResponse: 'Disculpa, tuve un problema. ¿Podrías contarme tus síntomas de nuevo?',
     };
   }
-
-  // 3) NO HAY PATRÓN NI ESPECIALIDAD REGISTRADA COINCIDENTE
-  console.log(
-    '⚠️ No se encontró ninguna especialidad registrada que coincida con el texto (no se recomendará Medicina General).'
-  );
-
-  return {
-    key: 'sin_especialidad',
-    name: 'la especialidad que corresponda a tus síntomas',
-    conademLabel: null,
-    hasDoctors: false,
-  };
 }
 
 // ========== FORMATEAR NOMBRE DE ESPECIALIDAD ==========
 function formatSpecialtyName(specialty) {
-  const text = (specialty || '').trim().toUpperCase();
-  
   const friendlyNames = {
-    'DOCTOR(A)EN MEDICINA': 'un médico general',
-    'DOCTOR(A) EN MEDICINA': 'un médico general',
-    'MEDICO(A) INTEGRAL COMUNITARIO': 'un médico general',
-
-    'DOCTOR(A) EN CIRUGÍA DENTAL': 'un odontólogo',
-    'DOCTOR(A) EN CIRUGIA DENTAL': 'un odontólogo',
-
-    'LIC. EN NUTRICION Y DIETETICA': 'un nutricionista',
-    'LIC. EN NUTRICION': 'un nutricionista',
-
-    'LIC. EN FISIOTERAPIA': 'un fisioterapeuta',
-    'TERAPIA FISICA': 'un fisioterapeuta',
-    'LIC. EN SALUD EN TERAPIA FISICA': 'un fisioterapeuta',
-    'LICENCIADO(A) EN TERAPIA FISICA': 'un fisioterapeuta',
-
-    'LIC. EN SALUD PERFIL TRAUMATOLOGIA': 'un traumatólogo',
-
-    'LIC. EN OPTOMETRIA': 'un optometrista',
-    'TEC. OPTOMETRIA': 'un optometrista',
-
-    'LICENCIADO(A) EN PSICOLOGIA': 'un psicólogo',
-
-    'LIC. EN QUIMICA Y FARMACIA': 'un profesional en farmacia',
-    'DOCTOR(A) EN QUIMICA Y FARMACIA': 'un profesional en farmacia',
-
-    'MÉDICO(A) VETERINARIO': 'un médico veterinario',
-    'MEDICO(A) VETERINARIO': 'un médico veterinario',
-
-    'LIC. EN ENFERMERIA': 'un profesional de enfermería',
-    'ENFERMERO(A) GRADUADO': 'un profesional de enfermería',
-
-    'LIC. EN SALUD MATERNO INFANTIL': 'un especialista en salud materno-infantil',
+    'medicina general': 'un médico general',
+    'nutrición': 'un nutricionista',
+    'cardiología': 'un cardiólogo',
+    'dermatología': 'un dermatólogo',
+    'pediatría': 'un pediatra',
+    'ginecología': 'un ginecólogo',
+    'gastroenterología': 'un gastroenterólogo',
+    'traumatología': 'un traumatólogo',
+    'fisioterapia': 'un fisioterapeuta',
+    'quiropractico': 'un quiropráctico',
+    'psicología': 'un psicólogo',
+    'odontología': 'un odontólogo',
+    'oftalmología': 'un oftalmólogo',
+    'urología': 'un urólogo',
   };
-  
-  if (friendlyNames[text]) return friendlyNames[text];
-  
-  for (const [key, value] of Object.entries(friendlyNames)) {
-    if (text.includes(key) || key.includes(text)) {
-      return value;
-    }
-  }
-  
-  const cleaned = text
-    .replace(/^(LIC\.|LICENCIADO\(A\)|TEC\.|TECNICO\(A\)|DOCTOR\(A\)|MEDICO\(A\))\s*/gi, '')
-    .replace(/\s+EN\s+/gi, ' ')
-    .toLowerCase()
-    .trim();
-  
-  return `un especialista en ${cleaned}`;
+
+  const specialtyLower = (specialty || '').toLowerCase();
+  return friendlyNames[specialtyLower] || `un especialista en ${specialty}`;
 }
 
 function normalizeKey(text) {
@@ -348,79 +126,83 @@ function normalizeKey(text) {
 }
 
 // ========== RESPUESTAS RÁPIDAS ==========
+// Respuestas variadas para parecer más natural
+const GREETING_RESPONSES = [
+  '¡Hola! 😊 ¿Cómo te puedo ayudar hoy? Si tenés algún malestar, contame y te recomiendo el médico adecuado.',
+  '¡Qué tal! Soy MediBot, tu asistente de salud. ¿En qué te puedo ayudar?',
+  '¡Hola! Con gusto te ayudo. ¿Necesitás encontrar un médico o tenés alguna consulta sobre la app?',
+];
+
+const THANKS_RESPONSES = [
+  '¡Con mucho gusto! Si necesitás algo más, aquí estoy.',
+  '¡De nada! Espero haberte ayudado. ¿Algo más en que te pueda servir?',
+  '¡Para eso estamos! No dudés en escribirme si necesitás algo más.',
+];
+
+const FAREWELL_RESPONSES = [
+  '¡Que estés bien! Recuerda que estoy aquí si me necesitás.',
+  '¡Hasta pronto! Cuidate mucho.',
+  '¡Nos vemos! Si te sentís mal, no dudés en buscar atención médica.',
+];
+
+function getRandomResponse(responses) {
+  return responses[Math.floor(Math.random() * responses.length)];
+}
+
 function getQuickResponse(text) {
-  const t = (text || '').toLowerCase();
-  
-  if (/^(hola|buenos días|buenas tardes|buenas noches|saludos)/.test(t)) {
-    return '¡Hola! 👋 Cuéntame tus síntomas o el tipo de consulta que buscas.';
+  const t = (text || '').toLowerCase().trim();
+
+  // Saludos
+  if (/^(hola|hey|buenas|buenos días|buenas tardes|buenas noches|saludos|qué tal|que tal|ey)/.test(t)) {
+    return getRandomResponse(GREETING_RESPONSES);
   }
-  
-  if (/(ayuda|necesito|urgente)/.test(t)) {
-    return 'Estoy aquí para ayudarte. ¿Qué te gustaría consultar?';
+
+  // Despedidas
+  if (/^(adiós|adios|chao|bye|hasta luego|nos vemos|me voy)/.test(t) || t === 'gracias adios' || t === 'gracias, adios') {
+    return getRandomResponse(FAREWELL_RESPONSES);
   }
-  
-  if (/(gracias|muchas gracias)/.test(t)) {
-    return '¡De nada! ¿Hay algo más en lo que pueda ayudarte? 😊';
+
+  // Agradecimientos
+  if (/(gracias|muchas gracias|te agradezco|muy amable)/.test(t) && t.length < 30) {
+    return getRandomResponse(THANKS_RESPONSES);
   }
-  
+
+  // Confirmaciones simples (sí, ok, etc.) - dejar que el flujo principal maneje esto
+  if (/^(sí|si|ok|dale|claro|va|está bien|listo)$/.test(t)) {
+    return null; // Dejar que el flujo principal maneje
+  }
+
+  // Preguntas sobre medicamentos - respuesta empática
+  if (/(qué medicina|qué medicamento|recomienda.*medicina|recomienda.*medicamento|pastilla|dosis|remedio|qué me tomo|que me tomo)/.test(t)) {
+    return 'Entiendo que querés alivio rápido, pero no me es posible recetar medicamentos. Lo mejor es que un médico te evalúe. ¿Querés que te recomiende uno según tus síntomas?';
+  }
+
+  // Preguntas sobre contacto/horarios/precios
+  if (/(teléfono|telefono|número|contacto|horario|precio|costo|cuánto cuesta|consulta.*precio)/.test(t)) {
+    return 'Esa información la encontrás en el perfil de cada médico. Si me contás qué necesitás, te puedo recomendar especialistas y ahí ves sus datos de contacto.';
+  }
+
+  // Ayuda con la app - agendar cita
+  if (/(cómo.*agendar|como.*agendar|agendar.*cita|hacer.*cita|reservar.*cita|sacar.*cita)/.test(t)) {
+    return '¡Es fácil! Solo tocá el perfil del médico que te interese y seleccioná "Agendar cita". Ahí elegís fecha y hora disponible. ¿Necesitás que te recomiende un médico primero?';
+  }
+
+  // Ayuda con la app - ver citas
+  if (/(dónde.*mis citas|donde.*mis citas|ver.*citas|consultar.*citas|mis citas)/.test(t)) {
+    return 'Tus citas agendadas las encontrás en la sección "Citas" del menú principal. Ahí podés ver el estado de cada una.';
+  }
+
+  // Usuario dice que se siente bien
+  if (/(me siento bien|estoy bien|todo bien|nada|no tengo nada)/.test(t)) {
+    return '¡Qué bueno que estés bien! 😊 Si en algún momento necesitás encontrar un médico o tenés alguna consulta, aquí estaré para ayudarte.';
+  }
+
+  // Usuario pregunta qué puede hacer el bot
+  if (/(qué puedes hacer|que puedes hacer|qué haces|que haces|para qué sirves|como funciona|cómo funciona)/.test(t)) {
+    return 'Te ayudo a encontrar el médico adecuado según tus síntomas. Solo contame cómo te sentís o qué molestia tenés, y te recomiendo especialistas cerca de vos. También puedo ayudarte con dudas sobre la app.';
+  }
+
   return null;
-}
-
-// ========== FECHAS DISPONIBLES ==========
-function getAvailableDates(n = 7) {
-  const days = [];
-  const start = dayjs();
-  for (let i = 0; i < n; i++) {
-    const d = start.add(i, 'day');
-    days.push({
-      date: d.format('YYYY-MM-DD'),
-      displayDate: d.format('ddd, D MMM'),
-    });
-  }
-  return days;
-}
-
-// ========== HORARIOS DISPONIBLES ==========
-async function getAvailableTimes(doctorId, dateYmd) {
-  const ref = doc(db, 'users', doctorId, 'availabilities', dateYmd);
-  const snap = await getDoc(ref);
-  let slots = [];
-
-  if (snap.exists()) {
-    const data = snap.data();
-    if (Array.isArray(data.slots)) slots = data.slots;
-    else if (Array.isArray(data.ranges))
-      slots = deriveSlotsFromRanges(data.ranges, data.slotDuration || 30);
-  }
-
-  const q = query(
-    collection(db, 'appointments'),
-    where('doctorId', '==', doctorId),
-    where('date', '==', dateYmd)
-  );
-  const taken = new Set();
-  const takenSnap = await getDocs(q);
-  takenSnap.forEach((d) => {
-    const x = d.data();
-    if (x?.time) taken.add(x.time);
-  });
-
-  return slots.filter((t) => !taken.has(t));
-}
-
-async function isTimeSlotAvailable(doctorId, dateYmd, hhmm) {
-  const times = await getAvailableTimes(doctorId, dateYmd);
-  return times.includes(hhmm);
-}
-
-// ========== CREAR CITA ==========
-async function createAppointment(payload) {
-  const docRef = await addDoc(collection(db, 'appointments'), {
-    ...payload,
-    status: 'scheduled',
-    createdAt: Timestamp.now(),
-  });
-  return docRef.id;
 }
 
 // ========== GUARDAR HISTORIAL ==========
@@ -435,11 +217,6 @@ async function saveChatHistory(userId, messages) {
 export default {
   analyzeSymptoms,
   getQuickResponse,
-  loadAvailableSpecialties,
-  checkDoctorsAvailability,
-  getAvailableDates,
-  getAvailableTimes,
-  isTimeSlotAvailable,
-  createAppointment,
   saveChatHistory,
+  ...openaiService,
 };

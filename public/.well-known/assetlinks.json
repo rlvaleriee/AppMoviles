@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.rlvaleriee.Appcitas",
+      "sha256_cert_fingerprints": [
+        "A4BCCC6FD0C60308AC0B600EE226BE2AEE977CC674E55E67D31ED4529575F02D"
+      ]
+    }
+  }
+]

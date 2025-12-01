@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediConnect - Redirigiendo...</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 500px;
+      text-align: center;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    }
+    h1 {
+      color: #2196F3;
+      margin: 0 0 10px 0;
+      font-size: 32px;
+    }
+    .subtitle {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+    h2 {
+      color: #333;
+      margin: 20px 0;
+      font-size: 24px;
+    }
+    p {
+      color: #666;
+      line-height: 1.6;
+      margin: 15px 0;
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #2196F3;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .button {
+      display: inline-block;
+      background: #2196F3;
+      color: white;
+      padding: 12px 30px;
+      border-radius: 25px;
+      text-decoration: none;
+      margin-top: 20px;
+      font-weight: 600;
+      transition: background 0.3s;
+    }
+    .button:hover {
+      background: #1976D2;
+    }
+    .error {
+      color: #F44336;
+      background: #FFEBEE;
+      padding: 15px;
+      border-radius: 10px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MediConnect</h1>
+    <p class="subtitle">HEALTH CARE</p>
+    <div class="spinner"></div>
+    <h2>Redirigiendo...</h2>
+    <p>Abriendo la aplicación MediConnect...</p>
+  </div>
+
+  <script>
+    (function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const mode = urlParams.get('mode');
+      const oobCode = urlParams.get('oobCode');
+
+      console.log('Deep link params:', { mode, oobCode });
+
+      if (mode === 'resetPassword' && oobCode) {
+        // Construir deep link
+        const deepLink = `appcitas://ResetPassword?oobCode=${oobCode}`;
+
+        console.log('Intentando abrir:', deepLink);
+
+        // Intentar abrir la app
+        window.location.href = deepLink;
+
+        // Después de 2 segundos, mostrar instrucciones si no se abrió la app
+        setTimeout(() => {
+          document.body.innerHTML = `
+            <div class="container">
+              <h1>MediConnect</h1>
+              <p class="subtitle">HEALTH CARE</p>
+              <h2>Restablecer Contraseña</h2>
+              <p>Por favor, abre la aplicación <strong>MediConnect</strong> en tu dispositivo móvil para continuar con el restablecimiento de contraseña.</p>
+              <p style="color: #999; font-size: 14px;">Si la aplicación no se abre automáticamente, ábrela manualmente desde tu dispositivo.</p>
+              <div style="margin-top: 30px; padding: 20px; background: #E3F2FD; border-radius: 10px;">
+                <p style="margin: 0; color: #1976D2; font-size: 14px;">
+                  <strong>¿No tienes la app instalada?</strong><br>
+                  Descarga MediConnect su página oficial.
+                </p>
+              </div>
+            </div>
+          `;
+        }, 2000);
+      } else if (mode === 'verifyEmail' && oobCode) {
+        // Manejar verificación de email
+        const deepLink = `appcitas://VerifyEmail?oobCode=${oobCode}`;
+        window.location.href = deepLink;
+
+        setTimeout(() => {
+          document.body.innerHTML = `
+            <div class="container">
+              <h1>MediConnect</h1>
+              <p class="subtitle">HEALTH CARE</p>
+              <h2>Verificar Email</h2>
+              <p>Abre la aplicación MediConnect para completar la verificación de tu correo electrónico.</p>
+            </div>
+          `;
+        }, 2000);
+      } else {
+        // Enlace inválido
+        document.body.innerHTML = `
+          <div class="container">
+            <h1>MediConnect</h1>
+            <p class="subtitle">HEALTH CARE</p>
+            <div class="error">
+              <h2 style="margin-top: 0;">Enlace Inválido</h2>
+              <p>Este enlace no es válido o ha expirado.</p>
+              <p style="font-size: 14px;">Por favor, solicita un nuevo enlace desde la aplicación.</p>
+            </div>
+          </div>
+        `;
+      }
+    })();
+  </script>
+</body>
+</html>
