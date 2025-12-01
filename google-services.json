@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "176981257185",
+    "project_id": "app-citas-2c83a",
+    "storage_bucket": "app-citas-2c83a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:176981257185:android:9d1bc8a1ea2f60688e40a0",
+        "android_client_info": {
+          "package_name": "com.rlvaleriee.Appcitas"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDL_NjZc8KqPRlxUjt4lcTzf_WOuLkePvo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
